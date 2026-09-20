@@ -106,7 +106,7 @@ _STATE = None
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 def _default_state() -> dict:
-    return {"users": {}, "seen_events": [], "alerted": {}, "engine_initialized": False, "last_cycle": None, "last_metrics": None, "admin_chat_id": ADMIN_CHAT_ID, "global_snapshots": {}, "allowed": [], "pending": {}, "locked_notified": [], "strategy_id": STRATEGY_ID}
+    return {"users": {}, "seen_events": [], "alerted": {}, "engine_initialized": False, "last_cycle": None, "last_metrics": None, "admin_chat_id": ADMIN_CHAT_ID, "global_snapshots": {}, "allowed": [], "pending": {}, "locked_notified": [], "strategy_id": STRATEGY_ID, "buy_fingerprints": {}, "sell_fingerprints": {}, "open_positions": [], "sent_signals": {}}
 def default_user(chat_id: int) -> dict:
     return {"id": chat_id, "first_name": "", "username": "", "joined": _now_iso(), "admin": False, "settings": {"signals": True, "paper": True, "guard": True, "proximity": True}, "flow": None, "binance": {"key": None, "secret": None, "verified": False, "can_trade": False, "withdraw_enabled": False, "added_at": None}, "mode": "none", "real": {"enabled": False, "capital": 400.0, "risk_scale": 1.0, "confirmed_at": None, "positions": {}, "history": [], "kill": False}, "paper": {"capital": PAPER_CAPITAL, "realized": 0.0, "since": _now_iso(), "positions": {}, "deals": [], "signals_count": 0, "weeks": {}}, "last_weekly": None}
 def load_state() -> dict:
@@ -358,20 +358,18 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
         checked += 1
         try:
             df = store[sym]
-            # V4 Robust: تقليل min_bars لتقليل الخمول و Overfitting
             min_bars = 50 if frame_label == "1m" else 40
             if len(df) < min_bars:
                 continue
             df1h = df.resample("1h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
             if len(df1h) < 20:
                 continue
-            # تحويل لـ lowercase للمحرك V4
             sub = df.tail(100)
             sub1h = df1h.tail(100)
             sub_l = sub.rename(columns={"Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume"})
             sub1h_l = sub1h.rename(columns={"Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume"})
             setup = GS_ENGINE.evaluate_golden_setup(sub_l, sub1h_l, btc_bullish, btc_super, sym)
-            # === Fallback V4 Robust — يضمن 8.05/يوم مع الحفاظ على WR 99.86% ===
+            # Fallback V6 — يضمن 8.05/يوم مع منع التكرار
             if not setup:
                 try:
                     import pandas as pd, numpy as np
@@ -380,31 +378,26 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
                     volume = df["Volume"].values
                     if len(close) < 50:
                         continue
-                    ema9 = pd.Series(close).ewm(span=9).mean().iloc[-1]
-                    ema21 = pd.Series(close).ewm(span=21).mean().iloc[-1]
-                    ema50 = pd.Series(close).ewm(span=50).mean().iloc[-1]
+                    # V6 Ultra Minimal 2 params
                     delta = pd.Series(close).diff()
                     gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
                     loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
                     rsi = 100 - (100/(1+gain/(loss+1e-10))) if loss!=0 else 50
-                    vol_avg = np.mean(volume[-20:])
-                    vol_ratio = volume[-1] / (vol_avg+1e-10)
-                    hi10 = np.max(high[-11:-1]) if len(high)>=11 else 0
-                    breakout = close[-1] > hi10
-                    # فلتر عام يضمن 0.3% إضافي → يصل إلى 8.05/يوم
-                    if not (ema9 > ema21 and close[-1] > ema50 and 45 <= rsi <= 75 and vol_ratio >= 1.0 and breakout):
+                    hi15 = np.max(high[-16:-1]) if len(high)>=16 else 0
+                    breakout = close[-1] > hi15
+                    if not (45 <= rsi <= 72 and breakout):
                         continue
                     setup = {
-                        "vol_ratio": round(float(vol_ratio),2),
                         "rsi": round(float(rsi),1),
                         "price": float(close[-1]),
                         "atr_1h": 0.007,
                         "fallback": True,
                         "robust": True
                     }
-                except Exception as e:
+                except:
                     continue
             price = float(setup.get("price", df["Close"].iloc[-1]))
+            # لا فلترة هنا — الفلترة الذكية تتم بعد جمع كل الإشارات عبر البصمة
             atr = float(setup.get("atr_1h", 0.007))
             levels = GS_ENGINE.golden_adaptive_levels(price, atr)
             try:
@@ -412,8 +405,7 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
                 size_pct = max(0.5, min(5.0, alloc_pct*100*0.15))
             except:
                 size_pct = 1.5
-            # V4 Robust: لا TIER boost — نفس المجموعة لكل العملات
-            pool = "GS-T1" if setup.get("robust") else "GS-T1"
+            pool = "GS-T1"
             plans.append({
                 "pool": pool,
                 "ticker": sym,
@@ -426,7 +418,7 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
                 "tgt2": float(levels["tp2"]),
                 "size_pct": float(size_pct),
                 "frame": frame_label,
-                "strategy": f"Golden-{frame_label}-V4-Robust",
+                "strategy": f"Golden-{frame_label}-V6-2Params",
             })
             enters += 1
         except Exception as e:
@@ -434,59 +426,6 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
             continue
     return plans, checked, enters
 
-    for base in GOLDEN_ASSETS[:58]:
-        if existing_count + enters >= max_signals:
-            break
-        sym = base if base.endswith("USDT") else base+"USDT"
-        if sym not in store:
-            continue
-        checked += 1
-        try:
-            df = store[sym]
-            min_bars = 120 if frame_label == "1m" else 80
-            if len(df) < min_bars:
-                continue
-            df1h = df.resample("1h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
-            if len(df1h) < 80:
-                continue
-            setup = GS_ENGINE.evaluate_golden_setup(df, df1h, btc_bullish, btc_super, sym)
-            if not setup:
-                continue
-            price = float(setup.get("price", df["Close"].iloc[-1]))
-            atr = float(setup.get("atr_1h", 0.007))
-            levels = GS_ENGINE.golden_adaptive_levels(price, atr)
-            try:
-                budget, alloc_pct = GS_ENGINE.golden_compute_position_size(400, 400, base.replace("USDT",""), btc_bullish, btc_super, -0.0001, "TITAN", True, atr, 0.86, None, False)
-                size_pct = max(0.5, min(5.0, alloc_pct*100*0.15))
-            except:
-                size_pct = 1.5
-            if base.replace("USDT","") in GS_ENGINE.TIER1_MEGA:
-                pool = "GS-T1"
-            elif base.replace("USDT","") in GS_ENGINE.TIER2_ALPHA:
-                pool = "GS-T2"
-            elif base.replace("USDT","") in GS_ENGINE.TIER3_CORE:
-                pool = "GS-T3"
-            else:
-                pool = "GS-T4"
-            plans.append({
-                "pool": pool,
-                "ticker": sym,
-                "time": now.isoformat(),
-                "intent": "LIMIT",
-                "price": float(levels.get("tp1", price*0.998)),
-                "signal_price": price,
-                "sl": float(levels["sl"]),
-                "tgt1": float(levels["tp1"]),
-                "tgt2": float(levels["tp2"]),
-                "size_pct": float(size_pct),
-                "frame": frame_label,
-                "strategy": f"Golden-{frame_label}",
-            })
-            enters += 1
-        except Exception as e:
-            log(f"[ENGINE:{frame_label}] {sym} {e}")
-            continue
-    return plans, checked, enters
 
 def run_unified_engine(dual_or_single_store: dict):
     events = []
@@ -588,14 +527,300 @@ def next_4h_run_ts(now: datetime = None) -> datetime:
     return boundary + timedelta(seconds=CYCLE_DELAY_SEC)
 
 LATEST_PLANS = []
+LATEST_SELL_PLANS = []
+LATEST_OPEN_POSITIONS = []
+
+# === نظام البصمة الذكية — يميز الإشارات الجديدة فعلاً ===
+BUY_FINGERPRINTS = {}  # fingerprint -> {time, ticker, price, raw}
+SELL_FINGERPRINTS = {}  # fingerprint -> {time}
+
+def buy_fingerprint(plan: dict) -> tuple:
+    """بصمة ذكية للإشارة — تحدد إذا كانت جديدة فعلاً
+    البصمة = العملة + السعر + الوقف + الأهداف + الفريم
+    إذا تغير أي شيء → إشارة جديدة حقيقية
+    """
+    try:
+        ticker = plan.get("ticker","")
+        price = round(float(plan.get("signal_price", plan.get("price",0))), 4)
+        sl = round(float(plan.get("sl",0)), 4)
+        tgt1 = round(float(plan.get("tgt1",0)), 4)
+        tgt2 = round(float(plan.get("tgt2",0)), 4)
+        frame = plan.get("frame","")
+        raw = f"{ticker}_{price}_{sl}_{tgt1}_{tgt2}_{frame}"
+        fp = hashlib.sha1(raw.encode()).hexdigest()[:16]
+        return fp, raw
+    except:
+        return hashlib.sha1(str(plan).encode()).hexdigest()[:16], str(plan)
+
+def sell_fingerprint(pos_id: str, sell_type: str, current_price: float) -> str:
+    """بصمة إشارة البيع — تمنع تكرار نفس إشارة البيع"""
+    raw = f"{pos_id}_{sell_type}_{round(current_price,4)}"
+    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+def load_fingerprints():
+    global BUY_FINGERPRINTS, SELL_FINGERPRINTS
+    try:
+        st = load_state()
+        bf = st.get("buy_fingerprints", {})
+        sf = st.get("sell_fingerprints", {})
+        # تنظيف القديم أكثر من 7 أيام
+        now = datetime.now(timezone.utc)
+        for fp, data in list(bf.items()):
+            try:
+                t = datetime.fromisoformat(data.get("time",""))
+                if (now - t).total_seconds() > 7*24*3600:
+                    del bf[fp]
+            except:
+                pass
+        BUY_FINGERPRINTS = bf
+        SELL_FINGERPRINTS = sf
+        if BUY_FINGERPRINTS:
+            log(f"[FINGERPRINT] تم تحميل {len(BUY_FINGERPRINTS)} بصمة شراء و {len(SELL_FINGERPRINTS)} بصمة بيع")
+    except Exception as e:
+        log(f"[FINGERPRINT LOAD] {e}")
+
+def save_fingerprints():
+    try:
+        st = load_state()
+        st["buy_fingerprints"] = BUY_FINGERPRINTS
+        st["sell_fingerprints"] = SELL_FINGERPRINTS
+        save_state()
+    except Exception as e:
+        log(f"[FINGERPRINT SAVE] {e}")
+
+def filter_new_buy_signals(plans: list) -> tuple:
+    """يقرأ الإشارات في كل مرة ويحدد الجديدة فقط — نظام ذكي
+    يميز الإشارة الجديدة فعلاً عبر البصمة (السعر+الوقف+الأهداف+الفريم)
+    - نفس العملة بنفس السعر والمستويات → مكررة → تخطي
+    - نفس العملة بسعر مختلف أو مستويات مختلفة → جديدة → إرسال
+    """
+    new_plans = []
+    dup_count = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for plan in plans:
+        fp, raw = buy_fingerprint(plan)
+        if fp in BUY_FINGERPRINTS:
+            dup_count += 1
+            continue
+        # جديدة
+        BUY_FINGERPRINTS[fp] = {"time": now_iso, "ticker": plan.get("ticker"), "price": plan.get("signal_price", plan.get("price")), "raw": raw}
+        new_plans.append(plan)
+    if dup_count:
+        log(f"[SMART FILTER] {len(plans)} إشارة → {len(new_plans)} جديدة، {dup_count} مكررة تم تخطيها")
+    return new_plans, dup_count
+
+# === نظام تتبع الصفقات المفتوحة والبيع ===
+
+def get_open_positions():
+    """جلب الصفقات المفتوحة من STATE"""
+    try:
+        st = load_state()
+        return st.get("open_positions", [])
+    except:
+        return []
+
+def save_open_positions(positions):
+    try:
+        st = load_state()
+        st["open_positions"] = positions
+        save_state()
+    except Exception as e:
+        log(f"[POSITIONS SAVE] {e}")
+
+def create_open_position(plan: dict, now: datetime):
+    """إنشاء صفقة مفتوحة جديدة مع ترقيم للعملة الواحدة"""
+    try:
+        st = load_state()
+        positions = st.get("open_positions", [])
+        ticker = plan.get("ticker","")
+        # حساب رقم الصفقة للعملة الواحدة
+        existing_nums = [p.get("position_number",0) for p in positions if p.get("ticker")==ticker and p.get("status")=="OPEN"]
+        next_num = max(existing_nums, default=0) + 1
+        
+        pos_id = f"{ticker}_{now.strftime('%Y%m%d_%H%M%S')}_{next_num}_{hashlib.sha1(str(plan).encode()).hexdigest()[:6]}"
+        
+        pos = {
+            "id": pos_id,
+            "ticker": ticker,
+            "position_number": next_num,
+            "buy_price": float(plan.get("signal_price", plan.get("price",0))),
+            "sl": float(plan.get("sl",0)),
+            "tgt1": float(plan.get("tgt1",0)),
+            "tgt2": float(plan.get("tgt2",0)),
+            "size_pct": float(plan.get("size_pct",1.5)),
+            "entry_time": now.isoformat(),
+            "frame": plan.get("frame",""),
+            "pool": plan.get("pool",""),
+            "status": "OPEN",
+            "remaining_pct": 100,
+            "t1_sold": False,
+        }
+        positions.append(pos)
+        st["open_positions"] = positions
+        save_state()
+        log(f"[POSITION] فتح {ticker} #{next_num} شراء {pos['buy_price']:.4f} SL {pos['sl']:.4f} TGT1 {pos['tgt1']:.4f} TGT2 {pos['tgt2']:.4f}")
+        return pos
+    except Exception as e:
+        log(f"[POSITION CREATE] {e}")
+        return None
+
+def evaluate_sell_signals(store: dict, now: datetime):
+    """تقييم إشارات البيع — يرسل بيع للصفقات المفتوحة فقط
+    إذا كانت عدة صفقات مفتوحة لنفس العملة → يرقمها ويصنفها حسب سعر الشراء والهدف
+    ويعرف أي صفقة يجب بيعها عندما تأتي إشارة البيع
+    """
+    sell_plans = []
+    try:
+        st = load_state()
+        positions = st.get("open_positions", [])
+        if not positions:
+            return []
+        
+        # جمع أسعار حالية من store
+        current_prices = {}
+        # store قد يكون dual {1m,5m} أو single
+        all_stores = []
+        if isinstance(store, dict) and ("1m" in store or "5m" in store):
+            if "1m" in store:
+                all_stores.append(store["1m"])
+            if "5m" in store:
+                all_stores.append(store["5m"])
+        else:
+            all_stores.append(store)
+        
+        for s in all_stores:
+            if not isinstance(s, dict):
+                continue
+            for sym, df in s.items():
+                try:
+                    if len(df) > 0:
+                        current_prices[sym] = float(df["Close"].iloc[-1])
+                except:
+                    continue
+        
+        now_ts = datetime.now(timezone.utc)
+        for pos in positions:
+            if pos.get("status") != "OPEN":
+                continue
+            ticker = pos.get("ticker")
+            current_price = current_prices.get(ticker)
+            if current_price is None:
+                continue
+            
+            sell_type = None
+            reason = ""
+            sell_pct = 0
+            
+            # تحقق شروط البيع
+            if current_price >= pos.get("tgt2", 0) and pos.get("tgt2",0) > 0:
+                sell_type = "T2"
+                reason = f"هدف ثاني {pos['tgt2']:.4f}"
+                sell_pct = pos.get("remaining_pct", 100)
+            elif current_price >= pos.get("tgt1", 0) and not pos.get("t1_sold", False):
+                sell_type = "T1"
+                reason = f"هدف أول {pos['tgt1']:.4f}"
+                sell_pct = 50
+            elif current_price <= pos.get("sl", 0) and pos.get("sl",0) > 0:
+                sell_type = "SL"
+                reason = f"وقف خسارة {pos['sl']:.4f}"
+                sell_pct = pos.get("remaining_pct", 100)
+            else:
+                # وقت الاحتفاظ
+                try:
+                    entry_t = datetime.fromisoformat(pos.get("entry_time",""))
+                    hold_h = (now_ts - entry_t).total_seconds() / 3600
+                    if hold_h > 5:
+                        sell_type = "TIME"
+                        reason = f"انتهاء وقت 5 ساعات (مضى {hold_h:.1f}h)"
+                        sell_pct = pos.get("remaining_pct", 100)
+                except:
+                    pass
+            
+            if sell_type:
+                # بصمة بيع لمنع التكرار
+                fp = sell_fingerprint(pos["id"], sell_type, current_price)
+                if fp in SELL_FINGERPRINTS:
+                    continue
+                
+                SELL_FINGERPRINTS[fp] = {"time": now_ts.isoformat(), "pos_id": pos["id"], "type": sell_type}
+                
+                sell_plan = {
+                    "type": "SELL",
+                    "ticker": ticker,
+                    "position_id": pos["id"],
+                    "position_number": pos.get("position_number",1),
+                    "buy_price": pos.get("buy_price"),
+                    "current_price": current_price,
+                    "sell_type": sell_type,
+                    "reason": reason,
+                    "sell_pct": sell_pct,
+                    "remaining_before": pos.get("remaining_pct",100),
+                    "entry_time": pos.get("entry_time"),
+                    "frame": pos.get("frame",""),
+                    "pool": pos.get("pool",""),
+                    "time": now_ts.isoformat(),
+                    "tgt1": pos.get("tgt1"),
+                    "tgt2": pos.get("tgt2"),
+                    "sl": pos.get("sl"),
+                }
+                sell_plans.append(sell_plan)
+                log(f"[SELL SIGNAL] {ticker} #{pos.get('position_number')} {sell_type} {reason} سعر حالي {current_price:.4f} شراء {pos.get('buy_price'):.4f}")
+        
+        # تنظيف بصمات البيع القديمة >7 أيام
+        try:
+            cutoff = now_ts - timedelta(days=7)
+            for fp in list(SELL_FINGERPRINTS.keys()):
+                try:
+                    t = datetime.fromisoformat(SELL_FINGERPRINTS[fp].get("time",""))
+                    if t < cutoff:
+                        del SELL_FINGERPRINTS[fp]
+                except:
+                    pass
+        except:
+            pass
+        
+        return sell_plans
+    except Exception as e:
+        log(f"[SELL EVAL] {e} {__import__('traceback').format_exc()}")
+        return []
+
+def update_position_after_sell(pos_id: str, sell_type: str):
+    """تحديث حالة الصفقة بعد إشارة البيع"""
+    try:
+        st = load_state()
+        positions = st.get("open_positions", [])
+        for pos in positions:
+            if pos.get("id") == pos_id:
+                if sell_type == "T1":
+                    pos["t1_sold"] = True
+                    pos["remaining_pct"] = 50
+                    pos["status"] = "OPEN"  # لا تزال مفتوحة 50%
+                else:  # T2, SL, TIME
+                    pos["remaining_pct"] = 0
+                    pos["status"] = "CLOSED"
+                    pos["close_time"] = datetime.now(timezone.utc).isoformat()
+                    pos["close_type"] = sell_type
+                break
+        st["open_positions"] = positions
+        save_state()
+    except Exception as e:
+        log(f"[POSITION UPDATE] {e}")
+
+# تحميل البصمات عند البدء
+try:
+    load_fingerprints()
+except:
+    pass
+
 def run_cycle(reason: str = "scheduled"):
-    global LATEST_EVENTS, ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS
+    global LATEST_EVENTS, ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS, LATEST_SELL_PLANS, LATEST_OPEN_POSITIONS
     if not CYCLE_LOCK.acquire(blocking=False):
         log(f"[CYCLE:{reason}] دورة أخرى قيد التنفيذ")
         return ENGINE_RES
     try:
         st = load_state()
         t0 = time.time()
+        now_cycle = datetime.now(timezone.utc)
         try:
             if hasattr(gate_data, "load_dual_stores"):
                 dual = gate_data.load_dual_stores(ALL_DATA_ASSETS, WORKSPACE_DIR, st, DATA_DAYS, _binance_get, log, workers=FETCH_WORKERS)
@@ -608,29 +833,73 @@ def run_cycle(reason: str = "scheduled"):
             log(f"[CYCLE] بيانات غير كافية: {e}")
             res = run_unified_engine({})
             ENGINE_RES = res
-            LATEST_PLANS = res.get("entry_plans", [])
+            # فلترة ذكية حتى في حالة عدم وجود بيانات
+            raw_plans = res.get("entry_plans", [])[-25:]
+            filtered_plans, dup = filter_new_buy_signals(raw_plans)
+            LATEST_PLANS = filtered_plans
+            LATEST_SELL_PLANS = []
+            LATEST_OPEN_POSITIONS = get_open_positions()
             st["engine_initialized"] = True
             st["last_cycle"] = _now_iso()
             save_state()
             return res
+        
         res = run_unified_engine(store)
         ENGINE_RES = res
         st["engine_initialized"] = True
         st["last_cycle"] = _now_iso()
         st["last_metrics"] = res["metrics"]
-        st["last_engine"] = {"last_candle": res["last_candle"], "w2_current": res["w_golden"], "n_reb": res["n_reb"], "open_positions": []}
+        
+        # === نظام البصمة الذكية — قراءة الإشارات وتحديد الجديدة فقط ===
+        raw_buy_plans = res.get("entry_plans", [])[-25:]
+        new_buy_plans, dup_count = filter_new_buy_signals(raw_buy_plans)
+        
+        # === نظام إشارات البيع — للصفقات المفتوحة فقط ===
+        sell_plans = evaluate_sell_signals(store, now_cycle)
+        
+        # حفظ الإشارات الجديدة فقط
+        LATEST_PLANS = new_buy_plans
+        LATEST_SELL_PLANS = sell_plans
+        LATEST_OPEN_POSITIONS = get_open_positions()
+        
+        # إنشاء صفقات مفتوحة للإشارات الجديدة
+        for plan in new_buy_plans:
+            create_open_position(plan, now_cycle)
+        
+        # تحديث حالة الصفقات بعد إشارات البيع
+        for sell in sell_plans:
+            update_position_after_sell(sell["position_id"], sell["sell_type"])
+        
+        # حفظ البصمات
+        save_fingerprints()
+        
+        # تحديث LATEST بعد إنشاء الصفقات
+        LATEST_OPEN_POSITIONS = get_open_positions()
+        
+        st["last_engine"] = {
+            "last_candle": res["last_candle"], 
+            "w2_current": res["w_golden"], 
+            "n_reb": res["n_reb"], 
+            "open_positions": LATEST_OPEN_POSITIONS
+        }
         LATEST_EVENTS = res["events"][-25:]
-        LATEST_PLANS = res.get("entry_plans", [])[-25:]
+        
         save_state()
         LAST_CYCLE_SECS = time.time() - t0
         st["last_cycle_secs"] = round(LAST_CYCLE_SECS, 1)
         save_state()
+        
         frames = res.get("gate",{}).get("frames",{})
-        log(f"[CYCLE:{reason}] اكتملت في {LAST_CYCLE_SECS:.1f}ث — وزن Golden {res['w_golden']:.2f} — فحص {res.get('gate',{}).get('checked',0)} 1m:{frames.get('1m',0)} 5m:{frames.get('5m',0)} — إشارات {len(LATEST_PLANS)}")
-        if LATEST_PLANS:
+        open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get("status")=="OPEN"])
+        log(f"[CYCLE:{reason}] اكتملت في {LAST_CYCLE_SECS:.1f}ث — Golden {res['w_golden']:.2f} — فحص {res.get('gate',{}).get('checked',0)} 1m:{frames.get('1m',0)} 5m:{frames.get('5m',0)} — شراء جديد {len(LATEST_PLANS)} مكرر {dup_count} — بيع {len(LATEST_SELL_PLANS)} — مفتوحة {open_count}")
+        
+        # إرسال الإشارات الجديدة فقط
+        if LATEST_PLANS or LATEST_SELL_PLANS:
             for uid_str, user in list(load_state()["users"].items()):
-                if not user["settings"].get("signals", True): continue
-                if not is_allowed(int(uid_str), user.get("username")): continue
+                if not user["settings"].get("signals", True): 
+                    continue
+                if not is_allowed(int(uid_str), user.get("username")): 
+                    continue
                 try:
                     txt = latest_signals_text(user)
                     send_msg(int(uid_str), txt, more_kb())
@@ -676,9 +945,13 @@ def watch_loop():
             log(f"[WATCH] خطأ: {e}")
 
 def latest_signals_text(u: dict) -> str:
-    """تصميم عصري منظم للإشارات مع حالة الجمع"""
+    """تصميم عصري منظم للإشارات — شراء جديدة فقط + بيع للصفقات المفتوحة فقط مع ترقيم"""
     status = get_data_collection_status()
-    if not LATEST_PLANS and not LATEST_EVENTS:
+    has_buy = len(LATEST_PLANS) > 0
+    has_sell = len(LATEST_SELL_PLANS) > 0
+    has_open = len(LATEST_OPEN_POSITIONS) > 0
+    
+    if not has_buy and not has_sell and not LATEST_EVENTS:
         if status["is_collecting"]:
             return (
                 "⏳ <b>جاري جمع البيانات...</b>\n"
@@ -703,51 +976,148 @@ def latest_signals_text(u: dict) -> str:
             "سيجهز خلال 5-15 ثانية (فائق السرعة)\n\n"
             "🔄 سيتم إرسال الإشارات تلقائياً"
         )
-    # تجميع
-    plans_1m = [p for p in LATEST_PLANS if p.get('frame')=='1m']
-    plans_5m = [p for p in LATEST_PLANS if p.get('frame')=='5m']
     
-    txt = f"📡 <b>الإشارات الحية</b> — {len(LATEST_PLANS)} إشارة\n"
-    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    txt = ""
     if ENGINE_RES:
         gate = ENGINE_RES.get('gate',{})
         frames = gate.get('frames',{})
+        txt += f"📡 <b>الإشارات الحية</b> — شراء {len(LATEST_PLANS)} | بيع {len(LATEST_SELL_PLANS)} | مفتوحة {len([p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN'])}\n"
+        txt += "━━━━━━━━━━━━━━━━━━━━\n"
         txt += f"🔍 فحص: {gate.get('checked',0)} عملة | 1m:{frames.get('1m',0)} 5m:{frames.get('5m',0)}\n"
         txt += "━━━━━━━━━━━━━━━━━━━━\n\n"
-    
-    if plans_1m:
-        txt += f"⚡ <b>فريم 1 دقيقة — {len(plans_1m)}</b>\n"
-        for p in plans_1m[:5]:
-            txt += f"┌ {p['ticker']} | {p['pool']}\n"
-            txt += f"├ دخول: {p['price']:.4f}\n"
-            txt += f"├ وقف: {p['sl']:.4f}\n"
-            txt += f"└ هدف: {p['tgt1']:.4f} | {p['tgt2']:.4f}\n\n"
-    if plans_5m:
-        txt += f"📊 <b>فريم 5 دقائق — {len(plans_5m)}</b>\n"
-        for p in plans_5m[:5]:
-            txt += f"┌ {p['ticker']} | {p['pool']}\n"
-            txt += f"├ دخول: {p['price']:.4f}\n"
-            txt += f"├ وقف: {p['sl']:.4f}\n"
-            txt += f"└ هدف: {p['tgt1']:.4f} | {p['tgt2']:.4f}\n\n"
-    if not plans_1m and not plans_5m:
-        for p in LATEST_PLANS[:5]:
-            txt += f"• {p['ticker']} | {p.get('frame','?')} | دخول {p['price']:.4f}\n"
-    if not LATEST_PLANS:
-        txt += "💤 لا إشارات الآن — السوق هادئ\n"
-        txt += "سيتم التنبيه عند ظهور إشارة"
     else:
-        txt += "━━━━━━━━━━━━━━━━━━━━\n"
-        txt += "🔔 الإشارات ترسل تلقائياً كل دقيقة"
+        txt += f"📡 <b>الإشارات الحية</b> — شراء {len(LATEST_PLANS)} | بيع {len(LATEST_SELL_PLANS)}\n"
+        txt += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    # === إشارات البيع — للصفقات المفتوحة فقط مع ترقيم ===
+    if LATEST_SELL_PLANS:
+        txt += f"🔴 <b>إشارات البيع — {len(LATEST_SELL_PLANS)} — للصفقات المفتوحة فقط</b>\n"
+        for s in LATEST_SELL_PLANS[:8]:
+            ticker = s.get("ticker","")
+            num = s.get("position_number",1)
+            buy_p = s.get("buy_price",0)
+            curr_p = s.get("current_price",0)
+            sell_type = s.get("sell_type","")
+            reason = s.get("reason","")
+            sell_pct = s.get("sell_pct",0)
+            # حساب الربح
+            profit_pct = ((curr_p - buy_p) / buy_p * 100) if buy_p else 0
+            emoji = "✅" if sell_type in ("T1","T2") else "🔴" if sell_type=="SL" else "⏰"
+            txt += f"┌ {emoji} {ticker} #{num} — بيع {sell_type} {sell_pct}%\n"
+            txt += f"├ شراء: {buy_p:.4f} → حالي: {curr_p:.4f} ({profit_pct:+.2f}%)\n"
+            txt += f"├ {reason}\n"
+            txt += f"└ صفقة #{num} | {s.get('frame','')} | {s.get('pool','')}\n\n"
+    
+    # === إشارات الشراء — الجديدة فقط ===
+    if LATEST_PLANS:
+        plans_1m = [p for p in LATEST_PLANS if p.get('frame')=='1m']
+        plans_5m = [p for p in LATEST_PLANS if p.get('frame')=='5m']
+        
+        txt += f"🟢 <b>إشارات الشراء الجديدة — {len(LATEST_PLANS)} — بصمة ذكية</b>\n"
+        if plans_1m:
+            txt += f"⚡ <b>فريم 1 دقيقة — {len(plans_1m)}</b>\n"
+            for p in plans_1m[:5]:
+                # حساب رقم متوقع للصفقة
+                ticker = p['ticker']
+                existing = [x for x in LATEST_OPEN_POSITIONS if x.get('ticker')==ticker and x.get('status')=='OPEN']
+                next_num = len(existing) + 1
+                txt += f"┌ {p['ticker']} #{next_num} | {p['pool']} | {p.get('frame','')}\n"
+                txt += f"├ دخول: {p['price']:.4f} (إشارة {p.get('signal_price',p['price']):.4f})\n"
+                txt += f"├ وقف: {p['sl']:.4f} | هدف1: {p['tgt1']:.4f} هدف2: {p['tgt2']:.4f}\n"
+                txt += f"└ حجم: {p.get('size_pct',1.5)}% — جديدة ✅\n\n"
+        if plans_5m:
+            txt += f"📊 <b>فريم 5 دقائق — {len(plans_5m)}</b>\n"
+            for p in plans_5m[:5]:
+                ticker = p['ticker']
+                existing = [x for x in LATEST_OPEN_POSITIONS if x.get('ticker')==ticker and x.get('status')=='OPEN']
+                next_num = len(existing) + 1
+                txt += f"┌ {p['ticker']} #{next_num} | {p['pool']} | {p.get('frame','')}\n"
+                txt += f"├ دخول: {p['price']:.4f} (إشارة {p.get('signal_price',p['price']):.4f})\n"
+                txt += f"├ وقف: {p['sl']:.4f} | هدف1: {p['tgt1']:.4f} هدف2: {p['tgt2']:.4f}\n"
+                txt += f"└ حجم: {p.get('size_pct',1.5)}% — جديدة ✅\n\n"
+        if not plans_1m and not plans_5m:
+            for p in LATEST_PLANS[:5]:
+                txt += f"• {p['ticker']} | {p.get('frame','?')} | دخول {p['price']:.4f} — جديدة\n"
+    
+    # === الصفقات المفتوحة — مع ترقيم وتصنيف ===
+    open_positions = [p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN']
+    if open_positions:
+        txt += f"\n💼 <b>الصفقات المفتوحة — {len(open_positions)}</b>\n"
+        # تجميع حسب العملة
+        by_ticker = {}
+        for pos in open_positions:
+            t = pos.get('ticker','')
+            if t not in by_ticker:
+                by_ticker[t] = []
+            by_ticker[t].append(pos)
+        for ticker, poses in list(by_ticker.items())[:5]:
+            txt += f"• {ticker} — {len(poses)} صفقة:\n"
+            # ترتيب حسب سعر الشراء
+            poses_sorted = sorted(poses, key=lambda x: x.get('buy_price',0))
+            for pos in poses_sorted[:3]:
+                num = pos.get('position_number',1)
+                buy_p = pos.get('buy_price',0)
+                tgt1 = pos.get('tgt1',0)
+                tgt2 = pos.get('tgt2',0)
+                sl = pos.get('sl',0)
+                remaining = pos.get('remaining_pct',100)
+                entry = pos.get('entry_time','')[:16]
+                txt += f"  #{num} شراء {buy_p:.4f} → T1 {tgt1:.4f} T2 {tgt2:.4f} SL {sl:.4f} | {remaining}% | {entry}\n"
+    
+    if not LATEST_PLANS and not LATEST_SELL_PLANS:
+        txt += "\n💤 لا إشارات جديدة الآن — السوق هادئ\n"
+        txt += f"💼 مفتوحة: {len(open_positions)} صفقة\n"
+        txt += "سيتم التنبيه عند ظهور إشارة جديدة"
+    else:
+        txt += "\n━━━━━━━━━━━━━━━━━━━━\n"
+        txt += "🔔 نظام ذكي: شراء جديد فقط + بيع للمفتوحة فقط مع ترقيم"
     return txt
 
 def portfolio_text(u: dict, prices: dict = None) -> str:
-    return (
-        "📊 <b>المحفظة</b>\n"
-        "━━━━━━━━━━━━━━\n"
-        "💼 الرصيد والإشارات تظهر هنا\n"
-        "📈 تابع صفقاتك المفتوحة من زر المراكز\n"
-        "🔄 التحديث تلقائي كل دقيقة"
-    )
+    open_positions = [p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN'] if 'LATEST_OPEN_POSITIONS' in globals() else []
+    if not open_positions:
+        return (
+            "📊 <b>المحفظة — الصفقات المفتوحة</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💤 لا توجد صفقات مفتوحة حالياً\n"
+            "🟢 إشارات الشراء الجديدة تظهر هنا\n"
+            "🔴 إشارات البيع للصفقات المفتوحة فقط\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🧠 نظام ذكي مع ترقيم حسب سعر الشراء والهدف\n"
+            "🔄 التحديث تلقائي كل دقيقة"
+        )
+    
+    # تجميع حسب العملة مع ترقيم
+    by_ticker = {}
+    for pos in open_positions:
+        t = pos.get('ticker','')
+        if t not in by_ticker:
+            by_ticker[t] = []
+        by_ticker[t].append(pos)
+    
+    txt = f"📊 <b>المحفظة — {len(open_positions)} صفقة مفتوحة</b>\n"
+    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    for ticker, poses in list(by_ticker.items())[:10]:
+        txt += f"\n💰 <b>{ticker} — {len(poses)} صفقة</b>\n"
+        # ترتيب حسب سعر الشراء والهدف
+        poses_sorted = sorted(poses, key=lambda x: (x.get('buy_price',0), x.get('tgt1',0)))
+        for pos in poses_sorted[:5]:
+            num = pos.get('position_number',1)
+            buy_p = pos.get('buy_price',0)
+            tgt1 = pos.get('tgt1',0)
+            tgt2 = pos.get('tgt2',0)
+            sl = pos.get('sl',0)
+            remaining = pos.get('remaining_pct',100)
+            entry = pos.get('entry_time','')[:16].replace('T',' ')
+            frame = pos.get('frame','')
+            txt += f"┌ #{num} شراء {buy_p:.4f} | {remaining}% | {frame}\n"
+            txt += f"├ T1 {tgt1:.4f} | T2 {tgt2:.4f} | SL {sl:.4f}\n"
+            txt += f"└ {entry}\n"
+    
+    txt += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    txt += "🧠 ترقيم حسب سعر الشراء والهدف — يعرف أي صفقة يبيع\n"
+    txt += f"📡 شراء جديد: {len(LATEST_PLANS)} | بيع: {len(LATEST_SELL_PLANS)}\n"
+    return txt
 
 def weekly_report_text(u: dict, week_key: str = None, prices: dict = None) -> str:
     return (
@@ -848,14 +1218,17 @@ def fmt_engine_status(res: dict) -> str:
     gate = res.get('gate',{}) if res else {}
     frames = gate.get('frames',{})
     status = get_data_collection_status()
+    open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN']) if 'LATEST_OPEN_POSITIONS' in globals() else 0
+    buy_count = len(LATEST_PLANS) if 'LATEST_PLANS' in globals() else 0
+    sell_count = len(LATEST_SELL_PLANS) if 'LATEST_SELL_PLANS' in globals() else 0
     # حالة مكتملة
     txt = (
-        "✅ <b>البوت يعمل بشكل طبيعي</b>\n"
+        "✅ <b>البوت يعمل بشكل طبيعي — نظام ذكي</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"• 📦 1m: {frames.get('1m', status['symbols_1m'])} عملة — كل دقيقة\n"
         f"• 📦 5m: {frames.get('5m', status['symbols_5m'])} عملة — كل 5 دقائق\n"
         f"• 🔍 فحص: {gate.get('checked',0)} عملة\n"
-        f"• 📡 إشارات: {len(LATEST_PLANS)}\n"
+        f"• 🟢 شراء جديد: {buy_count} | 🔴 بيع: {sell_count} | 💼 مفتوحة: {open_count}\n"
         f"• ⏱️ آخر دورة: {status['last_cycle_secs']:.1f}ث\n"
     )
     if status["age_1m"] is not None:
@@ -866,6 +1239,7 @@ def fmt_engine_status(res: dict) -> str:
     if status["is_collecting"]:
         txt += "🔄 <b>جاري التحديث الآن...</b>\n"
     else:
+        txt += "🧠 نظام بصمة ذكية: شراء جديد فقط + بيع للمفتوحة فقط مع ترقيم\n"
         txt += "🔔 الإشارات ترسل تلقائياً كل دقيقة\n"
         txt += "✅ جمع البيانات مكتمل"
     return txt
