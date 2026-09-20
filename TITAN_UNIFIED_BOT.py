@@ -143,6 +143,8 @@ def get_user(chat_id: int, create: bool = True) -> dict:
     if key not in st["users"] and create:
         st["users"][key] = default_user(chat_id)
     return st["users"].get(key)
+OWNER_ID = 8599225300  # معرفك — سيتم السماح له دائماً
+
 def is_allowed(chat_id, username: str = None) -> bool:
     if not PRIVATE_MODE:
         return True
@@ -151,6 +153,12 @@ def is_allowed(chat_id, username: str = None) -> bool:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return False
+    # مالك البوت — سماح دائم حتى لو تغيرت الإعدادات
+    if cid == OWNER_ID:
+        return True
+    # السماح المباشر من متغير البيئة ADMIN_CHAT_ID
+    if ADMIN_CHAT_ID and cid == int(ADMIN_CHAT_ID):
+        return True
     admin = st.get("admin_chat_id")
     if admin and cid == int(admin):
         return True
@@ -162,7 +170,8 @@ def is_allowed(chat_id, username: str = None) -> bool:
             return True
     if str(cid) in (st.get("allowed") or []):
         return True
-    if not admin and not (st.get("allowed") or []) and not ALLOWED_USERS_ENV:
+    # إذا لا يوجد مشرف نهائياً — أول مستخدم يصبح مشرف تلقائياً
+    if not admin and not ADMIN_CHAT_ID and not (st.get("allowed") or []) and not ALLOWED_USERS_ENV:
         return True
     return False
 
@@ -897,7 +906,34 @@ def handle_callback(cb: dict):
             except Exception as e:
                 send_msg(chat_id, f"🔑 خطأ: {esc(str(e))}", more_kb(), msg_id=msg_id)
         elif data.startswith("acc:"):
-            send_msg(chat_id, "📨 تم إرسال طلب الوصول للمشرف", more_kb(), msg_id=msg_id)
+            try:
+                st = load_state()
+                aid = st.get("admin_chat_id") or ADMIN_CHAT_ID
+                if aid:
+                    req_name = u.get("username") or u.get("first_name") or str(chat_id)
+                    send_msg(int(aid), f"📨 <b>طلب وصول جديد</b>\n━━━━━━━━━━━━━━\n👤 {esc(req_name)}\n🆔 <code>{chat_id}</code>\n\nللسماح له أضف معرفه في ALLOWED_USERS أو اجعله مشرفاً", [[bt("✅ سماح", f"acc:allow:{chat_id}")]])
+                send_msg(chat_id, f"📨 تم إرسال طلب الوصول للمشرف\n🆔 معرفك: <code>{chat_id}</code>\nانتظر الموافقة", more_kb(), msg_id=msg_id)
+            except Exception as e:
+                send_msg(chat_id, f"📨 تم إرسال طلب الوصول للمشرف\n🆔 {chat_id}", more_kb(), msg_id=msg_id)
+        elif data.startswith("acc:allow:"):
+            if not u.get("admin") and (ADMIN_CHAT_ID and int(chat_id) != int(ADMIN_CHAT_ID)):
+                send_msg(chat_id, "🔒 للمشرف فقط", api_back_kb(), msg_id=msg_id)
+            else:
+                try:
+                    target = data.split(":")[-1]
+                    st = load_state()
+                    allowed = st.get("allowed", [])
+                    if target not in allowed:
+                        allowed.append(target)
+                        st["allowed"] = allowed
+                        save_state()
+                    send_msg(chat_id, f"✅ تم السماح لـ {target}", full_menu_kb(u), msg_id=msg_id)
+                    try:
+                        send_msg(int(target), "✅ <b>تمت الموافقة على وصولك</b>\nاضغط /start", more_kb())
+                    except:
+                        pass
+                except Exception as e:
+                    send_msg(chat_id, f"⚠️ خطأ: {esc(str(e))}", full_menu_kb(u), msg_id=msg_id)
         else:
             log(f"[CB] غير معروف: {data}")
             send_msg(chat_id, f"🤖 <b>لوحة التحكم</b>\n━━━━━━━━━━━━━━\nاضغط للمتابعة", full_menu_kb(u), msg_id=msg_id)
@@ -915,8 +951,42 @@ def handle_update(upd: dict):
         cid = chat.get("id")
         if cid is None or chat.get("type") == "channel":
             return
+        # إصلاح فوري للمالك 8599225300 — يصبح مشرف حتى لو الملف قديم
+        try:
+            if int(cid) == OWNER_ID:
+                st = load_state()
+                if st.get("admin_chat_id") != OWNER_ID:
+                    st["admin_chat_id"] = OWNER_ID
+                    u = get_user(OWNER_ID)
+                    u["admin"] = True
+                    u["first_name"] = chat.get("first_name","") or u.get("first_name","")
+                    u["username"] = chat.get("username","") or u.get("username","")
+                    save_state()
+                    log(f"[AUTH] تم فرض المالك {OWNER_ID} كمشرف")
+        except:
+            pass
         if not is_allowed(cid, chat.get("username")):
-            send_msg(cid, f"🔒 بوت خاص — معرفك <code>{cid}</code>", [[bt("📨 طلب وصول", "acc:req")]])
+            st = load_state()
+            if not st.get("admin_chat_id") and not ADMIN_CHAT_ID:
+                st["admin_chat_id"] = int(cid)
+                u = get_user(cid)
+                u["admin"] = True
+                u["first_name"] = chat.get("first_name","")
+                u["username"] = chat.get("username","")
+                save_state()
+                log(f"[AUTH] أول مستخدم {cid} أصبح مشرف تلقائياً")
+                handle_text_message(msg)
+                return
+            send_msg(cid, (
+                f"🔒 <b>بوت خاص</b>\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"معرفك: <code>{cid}</code>\n\n"
+                f"💡 <b>الحل:</b>\n"
+                f"1. اضبط <code>ADMIN_CHAT_ID={cid}</code>\n"
+                f"2. أو <code>ALLOWED_USERS={cid}</code>\n"
+                f"3. أو احذف <code>bot_state_v241.json</code>\n"
+                f"━━━━━━━━━━━━━━"
+            ), [[bt("📨 طلب وصول", "acc:req")]])
             return
         handle_text_message(msg)
     elif "callback_query" in upd:
@@ -925,8 +995,27 @@ def handle_update(upd: dict):
         cid = frm.get("id")
         if cid is None:
             return
+        try:
+            if int(cid) == OWNER_ID:
+                st = load_state()
+                if st.get("admin_chat_id") != OWNER_ID:
+                    st["admin_chat_id"] = OWNER_ID
+                    u = get_user(OWNER_ID)
+                    u["admin"] = True
+                    save_state()
+        except:
+            pass
         if not is_allowed(cid, frm.get("username")):
-            answer_cb(cb.get("id",""), "🔒 بوت خاص")
+            st = load_state()
+            if not st.get("admin_chat_id") and not ADMIN_CHAT_ID:
+                st["admin_chat_id"] = int(cid)
+                u = get_user(cid)
+                u["admin"] = True
+                save_state()
+                log(f"[AUTH] أول مستخدم {cid} أصبح مشرف تلقائياً (callback)")
+                handle_callback(cb)
+                return
+            answer_cb(cb.get("id",""), "🔒 بوت خاص — غير مصرح")
             return
         handle_callback(cb)
 
@@ -1008,8 +1097,10 @@ def main():
     if not BOT_TOKEN:
         print("\n❌ لا يوجد BOT_TOKEN!", flush=True)
         sys.exit(1)
-    if not ADMIN_CHAT_ID:
-        raise RuntimeError("ADMIN_CHAT_ID مطلوب")
+    if ADMIN_CHAT_ID:
+        log(f"[BOOT] ADMIN_CHAT_ID من البيئة: {ADMIN_CHAT_ID}")
+    else:
+        log("[BOOT] ADMIN_CHAT_ID غير مضبوط — أول مستخدم سيصبح مشرفاً تلقائياً")
     LIVE.init(sys.modules[__name__])
     threading.Thread(target=health_loop, daemon=True, name="health").start()
     me = tg("getMe")
@@ -1022,6 +1113,7 @@ def main():
     if ADMIN_CHAT_ID and not st.get("admin_chat_id"):
         st["admin_chat_id"] = ADMIN_CHAT_ID
         save_state()
+        log(f"[BOOT] تم تعيين المشرف من البيئة: {ADMIN_CHAT_ID}")
     threading.Thread(target=cycle_loop, daemon=True, name="cycle").start()
     threading.Thread(target=watch_loop, daemon=True, name="watch").start()
     def _boot_welcome_when_ready():
