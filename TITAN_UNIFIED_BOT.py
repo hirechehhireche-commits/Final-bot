@@ -591,13 +591,31 @@ def watch_loop():
             log(f"[WATCH] خطأ: {e}")
 
 def latest_signals_text(u: dict) -> str:
-    """تصميم عصري منظم للإشارات"""
+    """تصميم عصري منظم للإشارات مع حالة الجمع"""
+    status = get_data_collection_status()
     if not LATEST_PLANS and not LATEST_EVENTS:
+        if status["is_collecting"]:
+            return (
+                "⏳ <b>جاري جمع البيانات...</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"📦 1m: {status['symbols_1m']}/{status['total_assets']} عملة\n"
+                f"📦 5m: {status['symbols_5m']}/{status['total_assets']} عملة\n"
+                f"💾 كاش: {'✅' if status['has_cache_1m'] else '❌'} 1m | {'✅' if status['has_cache_5m'] else '❌'} 5m\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🚀 وضع فائق السرعة 4 أيام\n"
+                "⏱️ 5-15 ثانية أول مرة\n"
+                "⏱️ 0.03 ثانية مع كاش\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "💡 اضغط ⚡ مباشر لمتابعة التقدم"
+            )
         return (
             "⏳ <b>جاري التحضير</b>\n"
-            "━━━━━━━━━━━━━━\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"📦 الحالة: {status['symbols_1m']} عملة 1m | {status['symbols_5m']} عملة 5m\n"
+            f"🔄 المحرك: {'✅ جاهز' if status['engine_ready'] else '⏳ يجهز'}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             "البوت يجمع البيانات من Binance...\n"
-            "سيجهز خلال 1-2 دقيقة\n\n"
+            "سيجهز خلال 5-15 ثانية (فائق السرعة)\n\n"
             "🔄 سيتم إرسال الإشارات تلقائياً"
         )
     # تجميع
@@ -656,29 +674,116 @@ def weekly_report_text(u: dict, week_key: str = None, prices: dict = None) -> st
         "قريباً..."
     )
 
+def get_data_collection_status() -> dict:
+    """إرجاع حالة جمع البيانات بالتفصيل"""
+    st = load_state()
+    s1 = st.get("gate_data_status_1m", {})
+    s5 = st.get("gate_data_status_5m", {})
+    now = datetime.now(timezone.utc)
+    # تحقق من وجود الكاش
+    from pathlib import Path
+    p1 = Path(WORKSPACE_DIR) / "gate1m_v102.pkl"
+    p5 = Path(WORKSPACE_DIR) / "gate5m_v102.pkl"
+    has_cache_1m = p1.exists()
+    has_cache_5m = p5.exists()
+    # عمر الكاش
+    age_1m = None
+    age_5m = None
+    try:
+        if s1.get("updated"):
+            age_1m = (now - pd.Timestamp(s1["updated"])).total_seconds() / 60
+    except:
+        pass
+    try:
+        if s5.get("updated"):
+            age_5m = (now - pd.Timestamp(s5["updated"])).total_seconds() / 60
+    except:
+        pass
+    # حالة المحرك
+    is_collecting = CYCLE_LOCK.locked()
+    engine_ready = st.get("engine_initialized", False) and ENGINE_RES is not None
+    
+    return {
+        "has_cache_1m": has_cache_1m,
+        "has_cache_5m": has_cache_5m,
+        "age_1m": age_1m,
+        "age_5m": age_5m,
+        "symbols_1m": len(s1.get("symbols", [])),
+        "symbols_5m": len(s5.get("symbols", [])),
+        "updated_1m": s1.get("updated"),
+        "updated_5m": s5.get("updated"),
+        "elapsed_1m": s1.get("elapsed_sec"),
+        "elapsed_5m": s5.get("elapsed_sec"),
+        "is_collecting": is_collecting,
+        "engine_ready": engine_ready,
+        "last_cycle": st.get("last_cycle"),
+        "last_cycle_secs": st.get("last_cycle_secs", LAST_CYCLE_SECS),
+        "total_assets": len(ALL_DATA_ASSETS),
+    }
+
 def fmt_engine_status(res: dict) -> str:
-    if res is None:
-        return (
-            "⏳ <b>المحرك في الإقلاع</b>\n"
-            "━━━━━━━━━━━━━━\n"
-            "• جلب بيانات Binance...\n"
-            "• 1m: 7-10 أيام\n"
-            "• 5m: 20 يوم\n"
-            "• سيجهز خلال 1-2 دقيقة"
-        )
-    gate = res.get('gate',{})
+    status = get_data_collection_status()
+    if res is None and not status["engine_ready"]:
+        # في مرحلة الجمع
+        if status["is_collecting"]:
+            txt = (
+                "⏳ <b>جاري جمع البيانات...</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔄 الحالة: يجمع الآن\n"
+                f"📦 1m: {status['symbols_1m']}/{status['total_assets']} عملة"
+            )
+            if status["elapsed_1m"]:
+                txt += f" ({status['elapsed_1m']}ث)\n"
+            else:
+                txt += "\n"
+            txt += f"📦 5m: {status['symbols_5m']}/{status['total_assets']} عملة"
+            if status["elapsed_5m"]:
+                txt += f" ({status['elapsed_5m']}ث)\n"
+            else:
+                txt += "\n"
+            if status["has_cache_1m"] or status["has_cache_5m"]:
+                txt += f"💾 كاش: {'✅' if status['has_cache_1m'] else '❌'} 1m | {'✅' if status['has_cache_5m'] else '❌'} 5m\n"
+            txt += "━━━━━━━━━━━━━━━━━━━━\n"
+            txt += "⏱️ الإقلاع السريع 4 أيام = 5-15 ثانية\n"
+            txt += "💡 تابع من زر ⚡ مباشر للتفاصيل"
+            return txt
+        else:
+            return (
+                "⏳ <b>المحرك في الإقلاع</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "• 🚀 وضع فائق السرعة — 4 أيام\n"
+                "• 📦 1m: 4 أيام = 5760 شمعة (96 شمعة 1h)\n"
+                "• 📦 5m: 4 أيام = 1152 شمعة\n"
+                "• ⏱️ يستغرق 5-15 ثانية أول مرة\n"
+                "• ⏱️ 0.03 ثانية مع كاش حديث\n"
+                "• 🔄 بعد الإقلاع: تحميل خلفي 7 أيام + 20 يوم\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "💡 اضغط ⚡ مباشر لمتابعة التقدم"
+            )
+    gate = res.get('gate',{}) if res else {}
     frames = gate.get('frames',{})
-    return (
+    status = get_data_collection_status()
+    # حالة مكتملة
+    txt = (
         "✅ <b>البوت يعمل بشكل طبيعي</b>\n"
-        "━━━━━━━━━━━━━━\n"
-        f"• 1m: {frames.get('1m',0)} عملة — كل دقيقة\n"
-        f"• 5m: {frames.get('5m',0)} عملة — كل 5 دقائق\n"
-        f"• فحص: {gate.get('checked',0)} عملة\n"
-        f"• إشارات: {len(LATEST_PLANS)}\n"
-        f"• آخر دورة: {LAST_CYCLE_SECS:.1f}ث\n"
-        "━━━━━━━━━━━━━━\n"
-        "🔔 الإشارات ترسل تلقائياً"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"• 📦 1m: {frames.get('1m', status['symbols_1m'])} عملة — كل دقيقة\n"
+        f"• 📦 5m: {frames.get('5m', status['symbols_5m'])} عملة — كل 5 دقائق\n"
+        f"• 🔍 فحص: {gate.get('checked',0)} عملة\n"
+        f"• 📡 إشارات: {len(LATEST_PLANS)}\n"
+        f"• ⏱️ آخر دورة: {status['last_cycle_secs']:.1f}ث\n"
     )
+    if status["age_1m"] is not None:
+        txt += f"• 🕐 عمر البيانات: 1m {status['age_1m']:.0f}د | 5m {status['age_5m']:.0f}د\n"
+    if status["has_cache_1m"] and status["has_cache_5m"]:
+        txt += f"• 💾 كاش: ✅ جاهز\n"
+    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    if status["is_collecting"]:
+        txt += "🔄 <b>جاري التحديث الآن...</b>\n"
+    else:
+        txt += "🔔 الإشارات ترسل تلقائياً كل دقيقة\n"
+        txt += "✅ جمع البيانات مكتمل"
+    return txt
 
 def backtest_summary(res: dict = None) -> str:
     try:
@@ -786,11 +891,26 @@ def handle_text_message(msg: dict):
         handle_start(chat_id, chat.get("first_name",""), chat.get("username",""))
     elif low.startswith("/about"):
         send_msg(chat_id, ABOUT_TEXT, api_back_kb())
-    elif low.startswith("/status"):
+    elif low.startswith("/status") or low.startswith("/progress") or low == "حالة الجمع":
+        status = get_data_collection_status()
+        txt = (
+            f"📊 <b>حالة جمع البيانات</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔄 جمع الآن: {'✅ نعم' if status['is_collecting'] else '❌ لا'}\n"
+            f"🤖 المحرك: {'✅ جاهز' if status['engine_ready'] else '⏳ يجهز'}\n"
+            f"📦 1m: {status['symbols_1m']}/{status['total_assets']} عملة\n"
+            f"📦 5m: {status['symbols_5m']}/{status['total_assets']} عملة\n"
+            f"💾 كاش 1m: {'✅' if status['has_cache_1m'] else '❌'} | 5m: {'✅' if status['has_cache_5m'] else '❌'}\n"
+        )
+        if status["age_1m"] is not None:
+            txt += f"🕐 عمر: 1m {status['age_1m']:.0f}د | 5m {status['age_5m']:.0f}د\n"
+        txt += f"⏱️ آخر دورة: {status['last_cycle_secs']:.1f}ث\n"
+        txt += "━━━━━━━━━━━━━━━━━━━━\n"
         if ENGINE_RES is None:
-            send_msg(chat_id, fmt_engine_status(None), full_menu_kb(u))
+            txt += fmt_engine_status(None)
         else:
-            send_msg(chat_id, fmt_engine_status(ENGINE_RES), full_menu_kb(u))
+            txt += fmt_engine_status(ENGINE_RES)
+        send_msg(chat_id, txt, back_kb([[bt("⚡ مباشر مفصل","bt:live:page:0")]]))
     else:
         send_msg(chat_id, "👋 أهلاً\nاضغط 🎛️ لفتح لوحة التحكم", more_kb())
 
@@ -886,19 +1006,69 @@ def handle_callback(cb: dict):
             send_msg(chat_id, txt, kb, msg_id=msg_id)
         elif data.startswith("bt:live:page:"):
             try:
-                txt = "⚡ <b>البيانات المباشرة</b>\n━━━━━━━━━━━━━━\n"
+                status = get_data_collection_status()
+                txt = "⚡ <b>حالة جمع البيانات — مباشر</b>\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━\n"
+                # حالة الجمع
+                if status["is_collecting"]:
+                    txt += "🔄 <b>الحالة: جاري الجمع الآن</b>\n"
+                else:
+                    txt += "✅ <b>الحالة: مكتمل — البوت يعمل</b>\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━\n"
+                # تفاصيل 1m
+                txt += f"📦 <b>فريم 1 دقيقة:</b>\n"
+                txt += f"• العملات: {status['symbols_1m']}/{status['total_assets']}\n"
+                txt += f"• الكاش: {'✅ موجود' if status['has_cache_1m'] else '❌ غير موجود'}\n"
+                if status["age_1m"] is not None:
+                    txt += f"• العمر: {status['age_1m']:.0f} دقيقة\n"
+                if status["elapsed_1m"]:
+                    txt += f"• زمن الجمع: {status['elapsed_1m']}ث\n"
+                if status["updated_1m"]:
+                    txt += f"• آخر تحديث: {status['updated_1m'][:19]}\n"
+                txt += "\n"
+                # تفاصيل 5m
+                txt += f"📦 <b>فريم 5 دقائق:</b>\n"
+                txt += f"• العملات: {status['symbols_5m']}/{status['total_assets']}\n"
+                txt += f"• الكاش: {'✅ موجود' if status['has_cache_5m'] else '❌ غير موجود'}\n"
+                if status["age_5m"] is not None:
+                    txt += f"• العمر: {status['age_5m']:.0f} دقيقة\n"
+                if status["elapsed_5m"]:
+                    txt += f"• زمن الجمع: {status['elapsed_5m']}ث\n"
+                if status["updated_5m"]:
+                    txt += f"• آخر تحديث: {status['updated_5m'][:19]}\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━\n"
+                # حالة المحرك
                 if ENGINE_RES:
                     gate = ENGINE_RES.get('gate',{})
                     frames = gate.get('frames',{})
-                    txt += f"• 1m: {frames.get('1m',0)} عملة\n• 5m: {frames.get('5m',0)} عملة\n• فحص: {gate.get('checked',0)}\n• إشارات: {len(LATEST_PLANS)}\n• زمن: {LAST_CYCLE_SECS:.1f}ث\n"
+                    txt += f"🤖 <b>المحرك:</b>\n"
+                    txt += f"• 1m: {frames.get('1m',0)} | 5m: {frames.get('5m',0)}\n"
+                    txt += f"• فحص: {gate.get('checked',0)} | إشارات: {len(LATEST_PLANS)}\n"
+                    txt += f"• زمن الدورة: {status['last_cycle_secs']:.1f}ث\n"
+                    if status["last_cycle"]:
+                        txt += f"• آخر دورة: {status['last_cycle'][:19]}\n"
                 else:
-                    st = load_state()
-                    s1 = st.get('gate_data_status_1m',{})
-                    s5 = st.get('gate_data_status_5m',{})
-                    txt += f"• 1m: {s1.get('updated','جاري الجمع...')}\n• 5m: {s5.get('updated','جاري الجمع...')}\n• سيجهز خلال دقيقة"
-                txt += "━━━━━━━━━━━━━━"
-                send_msg(chat_id, txt, back_kb([[bt("🔄 تحديث","bt:live:page:0")]]), msg_id=msg_id)
+                    txt += "🤖 المحرك: ⏳ لم يبدأ بعد\n"
+                    txt += "💡 سيبدأ بعد اكتمال الجمع (5-15ث)\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━\n"
+                # تفسير الحالات
+                if not status["engine_ready"]:
+                    txt += "⏳ <b>ماذا يحدث الآن؟</b>\n"
+                    if not status["has_cache_1m"] and not status["has_cache_5m"]:
+                        txt += "• أول إقلاع — يجمع 4 أيام (دقة كاملة)\n"
+                        txt += "• ⏱️ 5-15 ثانية ثم يجهز\n"
+                    elif status["is_collecting"]:
+                        txt += "• يجمع الشموع الجديدة (1-5 شموع)\n"
+                        txt += "• ⏱️ ثواني قليلة\n"
+                    else:
+                        txt += "• يجهز المحرك للتحليل\n"
+                else:
+                    txt += "✅ <b>مكتمل — البوت يفحص كل دقيقة</b>\n"
+                    txt += "• كاش حديث → 0.03ث\n"
+                    txt += "• خلفية: تحميل 7 أيام + 20 يوم\n"
+                send_msg(chat_id, txt, back_kb([[bt("🔄 تحديث مباشر","bt:live:page:0"), bt("📊 حالة المحرك","m:port")]]), msg_id=msg_id)
             except Exception as e:
+                log(f"[LIVE PAGE] {e} {traceback.format_exc()}")
                 send_msg(chat_id, f"⚡ خطأ: {esc(str(e))}", api_back_kb(), msg_id=msg_id)
         elif data == "m:api":
             try:
