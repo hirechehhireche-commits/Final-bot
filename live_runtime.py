@@ -72,47 +72,57 @@ def account(uid):return STORE.account(uid) if STORE else {'credential':None,'ena
 def panel(u):
     a=account(u['id']);active=EXEC.active(a) if EXEC else []
     venue=STORE.venue if STORE else os.environ.get('BINANCE_ENV','live')
-    label='Binance الحقيقي — أموال حقيقية' if venue=='live' else 'Spot Testnet — أموال تجريبية'
+    label='💰 حقيقي — Binance Spot' if venue=='live' else '🧪 تجريبي — Testnet'
     if a.get('use_full_balance') or a.get('capital',0)==0:
-        capital_text = "💎 كامل الرصيد (تراكمي) ✅ — يستخدم كل رصيدك + ما تضيفه، ويكمل بالمتبقي عند السحب"
+        capital_text = "💎 <b>كامل الرصيد تراكمي</b> ✅"
     else:
-        capital_text = f'💵 رأس المال المخصص: {a["capital"]:g} USDT | سقف الصفقة: {a["max_order"]:g} USDT'
+        capital_text = f'💵 مخصص: {a["capital"]:g} | سقف: {a["max_order"]:g}'
     equity_info = ""
+    status_icon = "✅" if a.get('credential') else "❌"
+    trade_icon = "🟢 مفعّل" if a.get('enabled') else "🔴 متوقف"
     if a.get('credential') and EXEC:
         try:
             total_eq, free, used = EXEC.get_total_equity(a, EXEC.client(a))
-            equity_info = f'\n📊 الرصيد الإجمالي التراكمي الحالي: {total_eq:.2f} USDT | الحر: {free:.2f} | المستخدم في صفقات البوت: {used:.2f}\n'
+            equity_info = (
+                f"━━━━━━━━━━━━━━\n"
+                f"📊 <b>الرصيد</b>\n"
+                f"• الإجمالي: <b>{total_eq:.2f} USDT</b>\n"
+                f"• الحر: {free:.2f} | المستخدم: {used:.2f}\n"
+            )
         except:
             pass
-    return ('🔑 <b>Binance API — التداول الذاتي — v241 سهل + تراكمي</b>\n'
-            f'🌐 {label}\n'
-            f'🔐 الربط: {"مكتمل ومشفّر" if a.get("credential") else "غير مربوط"}\n'
-            f'⚡ فتح صفقات جديدة: {"مفعّل" if a.get("enabled") else "متوقف"}\n'
-            f'{capital_text}\n'
-            f'📂 مراكز/أوامر البوت النشطة: {len(active)}\n'
-            + equity_info +
-            (f'⚠️ {B.esc(a["halt"])}\n' if a.get('halt') else '') +
-            'الدخول بإشارات جديدة فقط. الشراء والحدود على المنصة، والوقف السوقي يُثبت بعد تأكيد الملء. '
-            'لا رافعة ولا سحب. لا ضمان للأرباح أو للملء.\n'
-            'في وضع كامل الرصيد: كل إيداع جديد يُستخدم تلقائياً في الصفقات القادمة، وكل سحب يقلل الميزانية المتبقية ويستمر العمل تراكمياً.\n')
+    return (
+        f"🚀 <b>لوحة التداول</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🌐 {label}\n"
+        f"🔐 الربط: {status_icon} {'مكتمل ومشفّر' if a.get('credential') else 'غير مربوط'}\n"
+        f"⚡ التداول: {trade_icon}\n"
+        f"{capital_text}\n"
+        f"📂 مراكز نشطة: {len(active)}\n"
+        + equity_info +
+        (f"⚠️ {B.esc(a['halt'])}\n" if a.get('halt') else '') +
+        f"━━━━━━━━━━━━━━\n"
+        f"💡 <b>ملاحظة:</b> الدخول بإشارات جديدة فقط — وقف سوقي بعد الملء\n"
+    )
 
 def keyboard(u):
     bt=B.bt;rows=[];a=account(u['id'])
-    if a.get('credential'):
-        rows.append([bt('🔄 تحديث (صفحة آمنة)','api:add'),bt('⚡ تحديث سهل مباشر','api:easy_full')])
-        rows.append([bt('🗑️ حذف المفتاح','api:del')])
+    # تصميم عصري منظم — مجموعات واضحة
+    if not a.get('credential'):
+        # غير مربوط — أزرار ربط
+        rows.append([bt('🔐 ربط آمن (صفحة)', 'api:add')])
+        rows.append([bt('⚡ ربط سريع في البوت', 'api:easy_full')])
+        rows.append([bt('🛠️ ربط مخصص', 'api:easy')])
     else:
-        rows.append([bt('🔐 إضافة آمنة (صفحة)','api:add')])
-        rows.append([bt('⚡ إضافة سهلة مباشرة في البوت 💎','api:easy_full')])
-        rows.append([bt('🛠️ إضافة سهلة مخصصة','api:easy')])
-    if a.get('credential'):
-        rows.append([bt('👁️ عرض أرصدتي الحقيقية','api:bal'),bt('📂 أوامر البوت','api:orders')])
-    rows.append([bt('📝 الورقي / إيقاف الشراء','api:paper'),bt('⚡ التداول الحقيقي'+(' ✓' if a.get('enabled') else ''),'api:real')])
-    if a.get('credential'):
-        rows.append([bt('🛑 الطوارئ — إغلاق مراكز البوت','api:kill')])
-    if not a.get('use_full_balance') and a.get('credential'):
-        rows.append([bt('💎 تفعيل وضع كامل الرصيد التراكمي','api:full')])
-    return B.back_kb(rows)
+        # مربوط — حالة + إدارة
+        rows.append([bt('👁️ أرصدتي', 'api:bal'), bt('📂 مراكزي', 'api:orders')])
+        rows.append([bt('⚡ تفعيل التداول', 'api:real'), bt('📝 إيقاف الشراء', 'api:paper')])
+        rows.append([bt('🔄 تحديث المفتاح', 'api:easy_full'), bt('🔐 صفحة آمنة', 'api:add')])
+        rows.append([bt('🛑 إغلاق طارئ', 'api:kill'), bt('🗑️ حذف المفتاح', 'api:del')])
+        if not a.get('use_full_balance'):
+            rows.append([bt('💎 تفعيل كامل الرصيد', 'api:full')])
+    rows.append([bt('🏠 الرئيسية', 'nav:more')])
+    return rows
 
 def make_token(uid):
     if not PUBLIC_URL:raise ValueError('اضبط PUBLIC_BASE_URL على رابط Render الذي يبدأ بـhttps://')
