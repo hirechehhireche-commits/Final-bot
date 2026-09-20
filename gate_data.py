@@ -158,7 +158,8 @@ def load_gate_store(symbols, cache_dir, state, days, api_get, log, workers=3):
 
 def load_gate_store_1m(symbols, cache_dir, state, days, api_get, log, workers=3):
     """الاستراتيجية الأولى — فريم 1 دقيقة"""
-    return _load_store(symbols, cache_dir, state, days, api_get, log, workers, "1m", STEP_MS_1M, "gate1m_v102.pkl", 20000, 1)
+    # 7 أيام = 10080 شمعة، 10 أيام = 14400 — حد أدنى 6000 كافي لتجنب -1003
+    return _load_store(symbols, cache_dir, state, days, api_get, log, workers, "1m", STEP_MS_1M, "gate1m_v102.pkl", 6000, 1)
 
 def load_gate_store_5m(symbols, cache_dir, state, days, api_get, log, workers=3):
     """الاستراتيجية الثانية — فريم 5 دقائق"""

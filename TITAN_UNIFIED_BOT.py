@@ -218,6 +218,46 @@ def send_msg(chat_id, text: str, kb=None, msg_id: int = None):
     return tg("sendMessage", **params)
 def answer_cb(cb_id, text: str = ""):
     tg("answerCallbackQuery", callback_query_id=cb_id, text=text or None)
+
+def respond_cb(cb: dict, text: str, kb=None):
+    """يرد على callback ويعدل الرسالة — للتوافق مع live_runtime"""
+    try:
+        cb_id = cb.get("id","")
+        # رد سريع على تيليجرام
+        answer_cb(cb_id)
+        # تعديل الرسالة الأصلية إن وجدت
+        msg = cb.get("message") or {}
+        chat_id = msg.get("chat",{}).get("id")
+        msg_id = msg.get("message_id")
+        if chat_id and msg_id:
+            send_msg(chat_id, text, kb, msg_id=msg_id)
+        elif chat_id:
+            send_msg(chat_id, text, kb)
+    except Exception as e:
+        log(f"[RESPOND_CB] {e}")
+        try:
+            chat_id = (cb.get("message") or {}).get("chat",{}).get("id") or cb.get("from",{}).get("id")
+            if chat_id:
+                send_msg(chat_id, text, kb)
+        except:
+            pass
+
+def fmt_entry(p: dict, w2: float = 0.82, holds: dict = None) -> str:
+    """تنسيق إشارة دخول — بسيط ومختصر"""
+    try:
+        ticker = p.get("ticker","")
+        price = float(p.get("price",0))
+        sl = float(p.get("sl",0))
+        tgt1 = float(p.get("tgt1",0))
+        tgt2 = float(p.get("tgt2",0))
+        frame = p.get("frame","?")
+        pool = p.get("pool","")
+        txt = f"📡 إشارة {ticker} | {frame} | {pool}\n"
+        txt += f"دخول {price:.4f} | وقف {sl:.4f} | هدف1 {tgt1:.4f} هدف2 {tgt2:.4f}"
+        return txt
+    except Exception:
+        return f"إشارة {p.get('ticker','')}"
+
 def bt(text: str, data: str) -> dict:
     return {"text": text, "callback_data": data}
 def more_kb() -> list:
@@ -630,30 +670,114 @@ def handle_text_message(msg: dict):
 def handle_callback(cb: dict):
     data = cb.get("data","")
     chat_id = (cb.get("message") or {}).get("chat", {}).get("id") or cb.get("from", {}).get("id")
+    msg_id = (cb.get("message") or {}).get("message_id")
     u = get_user(chat_id)
-    answer_cb(cb.get("id",""))
-    # محاولة تمرير لـ LIVE أولاً (Binance)
+    # محاولة تمرير لـ LIVE أولاً (Binance) — كل api:
     try:
-        if LIVE.callback(cb, u):
-            return
+        if data.startswith("api:") or data == "m:api":
+            if LIVE.callback(cb, u):
+                return
     except Exception as e:
-        log(f"[CB LIVE] {e}")
-    if data == "nav:more":
-        send_msg(chat_id, "🤖 <b>TITAN v242 FREE ULTRA</b> — كل الخيارات:", full_menu_kb(u), msg_id=(cb.get("message") or {}).get("message_id"))
-    elif data in ("nav:less","nav:main"):
-        send_msg(chat_id, "🤖 <b>TITAN v242 FREE ULTRA</b>", more_kb(), msg_id=(cb.get("message") or {}).get("message_id"))
-    elif data == "m:abt":
-        send_msg(chat_id, ABOUT_TEXT, back_kb(), msg_id=(cb.get("message") or {}).get("message_id"))
-    elif data == "m:sig":
-        send_msg(chat_id, latest_signals_text(u), back_kb(), msg_id=(cb.get("message") or {}).get("message_id"))
-    elif data == "m:api":
-        # توجيه لبانل Binance
+        log(f"[CB LIVE] {e} {traceback.format_exc()}")
+        # لا نعود — نحاول معالجة كرسالة خطأ واضحة
         try:
-            send_msg(chat_id, LIVE.panel(u), LIVE.keyboard(u), msg_id=(cb.get("message") or {}).get("message_id"))
+            send_msg(chat_id, f"⚠️ خطأ: {esc(str(e))}", full_menu_kb(u), msg_id=msg_id)
         except:
-            send_msg(chat_id, "🔑 Binance API", more_kb(), msg_id=(cb.get("message") or {}).get("message_id"))
-    else:
-        send_msg(chat_id, "🤖 v242 FREE — زر غير معروف", full_menu_kb(u), msg_id=(cb.get("message") or {}).get("message_id"))
+            pass
+        return
+
+    # ردود عامة
+    try:
+        answer_cb(cb.get("id",""))
+    except:
+        pass
+
+    try:
+        if data == "nav:more":
+            send_msg(chat_id, "🤖 <b>بوت التداول الذكي</b> — كل الخيارات:", full_menu_kb(u), msg_id=msg_id)
+        elif data in ("nav:less","nav:main"):
+            send_msg(chat_id, "🤖 <b>بوت التداول</b>\nيضغط للإشارات", more_kb(), msg_id=msg_id)
+        elif data == "m:abt":
+            send_msg(chat_id, ABOUT_TEXT, back_kb(), msg_id=msg_id)
+        elif data == "m:sig":
+            send_msg(chat_id, latest_signals_text(u), back_kb([[bt("🔄 تحديث","m:sig")]]), msg_id=msg_id)
+        elif data == "m:guard":
+            # الصفقات المفتوحة
+            try:
+                acc = LIVE.account(chat_id)
+                active = LIVE.EXEC.active(acc) if LIVE.EXEC else []
+                if not active:
+                    txt = "🛡️ لا توجد صفقات مفتوحة حالياً\nالرصيد الحر: {:.2f} USDT".format(float(acc.get('capital',0)))
+                else:
+                    txt = f"🛡️ <b>الصفقات المفتوحة — {len(active)}</b>\n"
+                    for p in active[:10]:
+                        txt += f"• {p.get('symbol')} | {p.get('state')} | كمية {p.get('qty')} | وقف {p.get('stop')}\n"
+                send_msg(chat_id, txt, back_kb([[bt("🔄 تحديث","m:guard")]]), msg_id=msg_id)
+            except Exception as e:
+                send_msg(chat_id, f"🛡️ الصفقات: {esc(str(e))}", back_kb(), msg_id=msg_id)
+        elif data == "m:port":
+            try:
+                send_msg(chat_id, portfolio_text(u), back_kb(), msg_id=msg_id)
+            except:
+                send_msg(chat_id, "📊 محفظتي — الرصيد يظهر هنا", back_kb(), msg_id=msg_id)
+        elif data == "m:rep":
+            send_msg(chat_id, weekly_report_text(u), back_kb(), msg_id=msg_id)
+        elif data == "m:set":
+            txt = "⚙️ <b>الإعدادات</b>\n• الإشارات: {}\n• الحماية: {}\n• التقارب: {}\n".format(
+                "مفعلة" if u["settings"].get("signals") else "متوقفة",
+                "مفعلة" if u["settings"].get("guard") else "متوقفة",
+                "مفعلة" if u["settings"].get("proximity") else "متوقفة"
+            )
+            kb = [
+                [bt("🔔 تشغيل/إيقاف الإشارات","set:signals")],
+                [bt("🛡️ تشغيل/إيقاف الحماية","set:guard")],
+                [bt("🔽 المزيد","nav:more")]
+            ]
+            send_msg(chat_id, txt, kb, msg_id=msg_id)
+        elif data.startswith("set:"):
+            key = data.split(":")[1]
+            if key in u["settings"]:
+                u["settings"][key] = not u["settings"].get(key, True)
+                save_state()
+            send_msg(chat_id, f"⚙️ تم تغيير {key}", full_menu_kb(u), msg_id=msg_id)
+        elif data == "m:users":
+            if not u.get("admin"):
+                send_msg(chat_id, "🔒 للمشرف فقط", full_menu_kb(u), msg_id=msg_id)
+            else:
+                st = load_state()
+                allowed = st.get("allowed",[])
+                txt = f"👥 المستخدمين المسموحين: {len(allowed)}\n" + "\n".join(allowed[:20])
+                send_msg(chat_id, txt or "لا يوجد", back_kb(), msg_id=msg_id)
+        elif data.startswith("bt:page:"):
+            # باكتست
+            try:
+                page = int(data.split(":")[-1])
+            except:
+                page=0
+            if ENGINE_RES:
+                txt, kb = backtest_page_text(ENGINE_RES, page)
+                send_msg(chat_id, txt, kb, msg_id=msg_id)
+            else:
+                send_msg(chat_id, "📋 النتائج — المحرك لم يجهز بعد", back_kb(), msg_id=msg_id)
+        elif data.startswith("bt:live:page:"):
+            send_msg(chat_id, "⚡ مباشر — آخر 60 يوم — البيانات الحية", back_kb(), msg_id=msg_id)
+        elif data == "m:api":
+            try:
+                send_msg(chat_id, LIVE.panel(u), LIVE.keyboard(u), msg_id=msg_id)
+            except Exception as e:
+                send_msg(chat_id, f"🔑 المنصة: {esc(str(e))}", more_kb(), msg_id=msg_id)
+        elif data.startswith("acc:"):
+            send_msg(chat_id, "📨 تم إرسال طلب الوصول للمشرف", more_kb(), msg_id=msg_id)
+        else:
+            # أي زر غير معروف — لا نظهر خطأ مخيف، نعرض القائمة
+            log(f"[CB] زر غير معروف: {data} من {chat_id}")
+            send_msg(chat_id, f"🤖 زر: {esc(data)}\nاضغط المزيد للقائمة", full_menu_kb(u), msg_id=msg_id)
+    except Exception as e:
+        log(f"[CB MAIN] {e} {traceback.format_exc()}")
+        try:
+            send_msg(chat_id, f"⚠️ خطأ بسيط: {esc(str(e))} — حاول مرة أخرى", full_menu_kb(u), msg_id=msg_id)
+        except:
+            pass
 
 def handle_update(upd: dict):
     if "message" in upd:
