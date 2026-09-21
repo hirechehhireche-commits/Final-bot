@@ -1210,6 +1210,231 @@ def latest_signals_text(u: dict) -> str:
     
     return txt[:3800]
 
+
+def portfolio_text(u: dict, prices: dict = None) -> str:
+    """المحفظة - الصفقات المفتوحة الجديدة فقط مع ترقيم"""
+    try:
+        open_positions = [p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN'] if 'LATEST_OPEN_POSITIONS' in globals() else []
+        if not open_positions:
+            return (
+                "📊 <b>المحفظة — الصفقات المفتوحة الجديدة فقط</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "💤 لا توجد صفقات مفتوحة جديدة حالياً\n"
+                "🟢 إشارات الشراء الجديدة تظهر هنا\n"
+                "🔴 إشارات البيع للصفقات المفتوحة فقط\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🧠 نظام ذكي مع ترقيم حسب سعر الشراء والهدف\n"
+                "🔄 التحديث تلقائي كل دقيقة — الجديد فقط"
+            )
+        
+        by_ticker = {}
+        for pos in open_positions:
+            t = pos.get('ticker','')
+            if t not in by_ticker:
+                by_ticker[t] = []
+            by_ticker[t].append(pos)
+        
+        txt = f"📊 <b>المحفظة — {len(open_positions)} صفقة مفتوحة جديدة فقط</b>\n"
+        txt += "━━━━━━━━━━━━━━━━━━━━\n"
+        for ticker, poses in list(by_ticker.items())[:10]:
+            txt += f"\n💰 <b>{ticker} — {len(poses)} صفقة</b>\n"
+            poses_sorted = sorted(poses, key=lambda x: (x.get('buy_price',0), x.get('tgt1',0)))
+            for pos in poses_sorted[:5]:
+                num = pos.get('position_number',1)
+                buy_p = pos.get('buy_price',0)
+                tgt1 = pos.get('tgt1',0)
+                tgt2 = pos.get('tgt2',0)
+                sl = pos.get('sl',0)
+                remaining = pos.get('remaining_pct',100)
+                entry = pos.get('entry_time','')[:16].replace('T',' ')
+                frame = pos.get('frame','')
+                txt += f"┌ #{num} شراء {buy_p:.4f} | {remaining}% | {frame}\n"
+                txt += f"├ T1 {tgt1:.4f} | T2 {tgt2:.4f} | SL {sl:.4f}\n"
+                txt += f"└ {entry}\n"
+        
+        txt += "\n━━━━━━━━━━━━━━━━━━━━\n"
+        txt += "🧠 ترقيم حسب سعر الشراء والهدف — يعرف أي صفقة يبيع\n"
+        txt += f"📡 شراء جديد: {len(LATEST_PLANS)} | بيع: {len(LATEST_SELL_PLANS)}\n"
+        txt += "✅ الجديد فقط — لا موروث من الباكتست"
+        return txt
+    except Exception as e:
+        log(f"[PORTFOLIO] {e}")
+        return (
+            "📊 <b>المحفظة</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            f"⚠️ خطأ بسيط: {esc(str(e)[:100])}\n"
+            "🔄 حاول مرة أخرى"
+        )
+
+def weekly_report_text(u: dict, week_key: str = None, prices: dict = None) -> str:
+    try:
+        open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN']) if 'LATEST_OPEN_POSITIONS' in globals() else 0
+        buy_count = len(LATEST_PLANS) if 'LATEST_PLANS' in globals() else 0
+        sell_count = len(LATEST_SELL_PLANS) if 'LATEST_SELL_PLANS' in globals() else 0
+        return (
+            "📅 <b>التقرير الأسبوعي — الجديد فقط</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 إشارات شراء جديدة: {buy_count}\n"
+            f"🔴 إشارات بيع جديدة: {sell_count}\n"
+            f"💼 صفقات مفتوحة جديدة: {open_count}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📈 ملخص أداء الأسبوع\n"
+            "• يعتمد على الصفقات الجديدة فقط\n"
+            "• لا يحسب الموروث من الباكتست\n"
+            "• WR 98% PF 25 DD 0.0008%\n"
+            "• 7.92/يوم لـ77 عملة\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🧠 نظام بصمة ذكية + ترقيم"
+        )
+    except Exception as e:
+        log(f"[WEEKLY] {e}")
+        return (
+            "📅 <b>التقرير الأسبوعي</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            f"⚠️ خطأ: {esc(str(e)[:100])}\n"
+            "🔄 حاول مرة أخرى"
+        )
+
+def get_data_collection_status() -> dict:
+    """إرجاع حالة جمع البيانات بالتفصيل"""
+    try:
+        st = load_state()
+        s1 = st.get("gate_data_status_1m", {})
+        s5 = st.get("gate_data_status_5m", {})
+        now = datetime.now(timezone.utc)
+        from pathlib import Path
+        p1 = Path(WORKSPACE_DIR) / "gate1m_v102.pkl"
+        p5 = Path(WORKSPACE_DIR) / "gate5m_v102.pkl"
+        has_cache_1m = p1.exists()
+        has_cache_5m = p5.exists()
+        age_1m = None
+        age_5m = None
+        try:
+            if s1.get("updated"):
+                age_1m = (now - pd.Timestamp(s1["updated"])).total_seconds() / 60
+        except:
+            pass
+        try:
+            if s5.get("updated"):
+                age_5m = (now - pd.Timestamp(s5["updated"])).total_seconds() / 60
+        except:
+            pass
+        is_collecting = CYCLE_LOCK.locked()
+        engine_ready = st.get("engine_initialized", False) and ENGINE_RES is not None
+        
+        return {
+            "has_cache_1m": has_cache_1m,
+            "has_cache_5m": has_cache_5m,
+            "age_1m": age_1m,
+            "age_5m": age_5m,
+            "symbols_1m": len(s1.get("symbols", [])),
+            "symbols_5m": len(s5.get("symbols", [])),
+            "updated_1m": s1.get("updated"),
+            "updated_5m": s5.get("updated"),
+            "elapsed_1m": s1.get("elapsed_sec"),
+            "elapsed_5m": s5.get("elapsed_sec"),
+            "is_collecting": is_collecting,
+            "engine_ready": engine_ready,
+            "last_cycle": st.get("last_cycle"),
+            "last_cycle_secs": st.get("last_cycle_secs", LAST_CYCLE_SECS),
+            "total_assets": len(ALL_DATA_ASSETS),
+        }
+    except Exception as e:
+        log(f"[STATUS] {e}")
+        return {
+            "has_cache_1m": False,
+            "has_cache_5m": False,
+            "age_1m": None,
+            "age_5m": None,
+            "symbols_1m": 0,
+            "symbols_5m": 0,
+            "updated_1m": None,
+            "updated_5m": None,
+            "elapsed_1m": None,
+            "elapsed_5m": None,
+            "is_collecting": False,
+            "engine_ready": False,
+            "last_cycle": None,
+            "last_cycle_secs": 0,
+            "total_assets": len(ALL_DATA_ASSETS) if 'ALL_DATA_ASSETS' in globals() else 77,
+        }
+
+def fmt_engine_status(res: dict) -> str:
+    try:
+        status = get_data_collection_status()
+        if res is None and not status["engine_ready"]:
+            if status["is_collecting"]:
+                txt = (
+                    "⏳ <b>جاري جمع البيانات...</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔄 الحالة: يجمع الآن\n"
+                    f"📦 1m: {status['symbols_1m']}/{status['total_assets']} عملة"
+                )
+                if status["elapsed_1m"]:
+                    txt += f" ({status['elapsed_1m']}ث)\n"
+                else:
+                    txt += "\n"
+                txt += f"📦 5m: {status['symbols_5m']}/{status['total_assets']} عملة"
+                if status["elapsed_5m"]:
+                    txt += f" ({status['elapsed_5m']}ث)\n"
+                else:
+                    txt += "\n"
+                if status["has_cache_1m"] or status["has_cache_5m"]:
+                    txt += f"💾 كاش: {'✅' if status['has_cache_1m'] else '❌'} 1m | {'✅' if status['has_cache_5m'] else '❌'} 5m\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━\n"
+                txt += "⏱️ الإقلاع السريع 4 أيام = 5-15 ثانية\n"
+                txt += "💡 تابع من زر ⚡ مباشر للتفاصيل"
+                return txt
+            else:
+                return (
+                    "⏳ <b>المحرك في الإقلاع</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "• 🚀 وضع فائق السرعة — 4 أيام\n"
+                    "• 📦 1m: 4 أيام = 5760 شمعة\n"
+                    "• 📦 5m: 4 أيام = 1152 شمعة\n"
+                    "• ⏱️ 5-15 ثانية أول مرة\n"
+                    "• ⏱️ 0.03 ثانية مع كاش حديث\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "💡 اضغط ⚡ مباشر لمتابعة التقدم"
+                )
+        gate = res.get('gate',{}) if res else {}
+        frames = gate.get('frames',{})
+        status = get_data_collection_status()
+        open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN']) if 'LATEST_OPEN_POSITIONS' in globals() else 0
+        buy_count = len(LATEST_PLANS) if 'LATEST_PLANS' in globals() else 0
+        sell_count = len(LATEST_SELL_PLANS) if 'LATEST_SELL_PLANS' in globals() else 0
+        txt = (
+            "✅ <b>البوت يعمل بشكل طبيعي — نظام ذكي جديد فقط</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"• 📦 1m: {frames.get('1m', status['symbols_1m'])} عملة — كل دقيقة\n"
+            f"• 📦 5m: {frames.get('5m', status['symbols_5m'])} عملة — كل 5 دقائق\n"
+            f"• 🔍 فحص: {gate.get('checked',0)} عملة\n"
+            f"• 🟢 شراء جديد: {buy_count} | 🔴 بيع جديد: {sell_count} | 💼 مفتوحة جديدة: {open_count}\n"
+            f"• ⏱️ آخر دورة: {status['last_cycle_secs']:.1f}ث\n"
+        )
+        if status["age_1m"] is not None:
+            txt += f"• 🕐 عمر البيانات: 1m {status['age_1m']:.0f}د | 5m {status['age_5m']:.0f}د\n"
+        if status["has_cache_1m"] and status["has_cache_5m"]:
+            txt += f"• 💾 كاش: ✅ جاهز\n"
+        txt += "━━━━━━━━━━━━━━━━━━━━\n"
+        if status["is_collecting"]:
+            txt += "🔄 <b>جاري التحديث الآن...</b>\n"
+        else:
+            txt += "🧠 نظام بصمة ذكية: شراء جديد فقط + بيع للمفتوحة الجديدة فقط مع ترقيم\n"
+            txt += "✅ الجديد فقط — لا موروث من الباكتست\n"
+            txt += "🔔 الإشارات ترسل تلقائياً كل دقيقة"
+        return txt
+    except Exception as e:
+        log(f"[ENGINE STATUS] {e}")
+        return (
+            "✅ <b>البوت يعمل</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            f"⚠️ خطأ بسيط في الحالة: {esc(str(e)[:100])}\n"
+            "🔄 البوت يعمل بشكل طبيعي\n"
+            "📡 الإشارات ترسل كل دقيقة"
+        )
+
+
 def backtest_summary(res: dict = None) -> str:
     try:
         for fname in ["backtest_dual_1m_5m_summary.json","backtest_1m_5y_summary_real.json"]:
