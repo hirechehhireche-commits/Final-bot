@@ -385,32 +385,58 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
             sub_l = sub.rename(columns={"Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume"})
             sub1h_l = sub1h.rename(columns={"Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume"})
             setup = GS_ENGINE.evaluate_golden_setup(sub_l, sub1h_l, btc_bullish, btc_super, sym)
-            # Fallback V6 — يضمن 8.05/يوم مع منع التكرار
+            # Fallback V7 — يضمن إرسال إشارات حتى لو السوق هادئ
+            # إذا المحرك الذهبي لم يعط إشارة، نستخدم fallback أكثر ليونة لضمان إرسال
             if not setup:
                 try:
                     import pandas as pd, numpy as np
                     close = df["Close"].values
                     high = df["High"].values
+                    low = df["Low"].values
                     volume = df["Volume"].values
                     if len(close) < 50:
                         continue
-                    # V6 Ultra Minimal 2 params
+                    
+                    # حساب RSI
                     delta = pd.Series(close).diff()
                     gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
                     loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
                     rsi = 100 - (100/(1+gain/(loss+1e-10))) if loss!=0 else 50
+                    
+                    # حساب BO مع خيارين: 15 و 10 (أكثر ليونة)
                     hi15 = np.max(high[-16:-1]) if len(high)>=16 else 0
-                    breakout = close[-1] > hi15
-                    if not (45 <= rsi <= 72 and breakout):
+                    hi10 = np.max(high[-11:-1]) if len(high)>=11 else 0
+                    breakout15 = close[-1] > hi15
+                    breakout10 = close[-1] > hi10
+                    
+                    # شرط لين: RSI 30-80 و BO10 (يضمن إشارات أكثر)
+                    # وشرط صارم: RSI 45-72 و BO15 (الأصلي)
+                    is_strict = (45 <= rsi <= 72 and breakout15)
+                    is_lenient = (30 <= rsi <= 80 and breakout10)
+                    
+                    # إذا لا يوجد حتى اللين → لا إشارة (سوق هادئ جداً)
+                    if not is_lenient:
                         continue
+                    
+                    # إذا لين فقط وليس صارم → نعطي إشارة لكن نعلم أنها لينة
                     setup = {
                         "rsi": round(float(rsi),1),
                         "price": float(close[-1]),
                         "atr_1h": 0.007,
                         "fallback": True,
-                        "robust": True
+                        "robust": True,
+                        "lenient": not is_strict,
+                        "strict": is_strict
                     }
-                except:
+                    
+                    # سجل
+                    if is_strict:
+                        log(f"[FALLBACK] {sym} صارم RSI {rsi:.1f} BO15")
+                    else:
+                        log(f"[FALLBACK] {sym} لين RSI {rsi:.1f} BO10 (لضمان إرسال)")
+                        
+                except Exception as e:
+                    log(f"[FALLBACK] {sym} error {e}")
                     continue
             price = float(setup.get("price", df["Close"].iloc[-1]))
             # لا فلترة هنا — الفلترة الذكية تتم بعد جمع كل الإشارات عبر البصمة
@@ -1055,6 +1081,15 @@ def run_cycle(reason: str = "scheduled"):
         open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get("status")=="OPEN"])
         log(f"[CYCLE:{reason}] اكتملت في {LAST_CYCLE_SECS:.1f}ث — Golden {res['w_golden']:.2f} — فحص {res.get('gate',{}).get('checked',0)} 1m:{frames.get('1m',0)} 5m:{frames.get('5m',0)} — شراء جديد {len(LATEST_PLANS)} مكرر {dup_count} — بيع {len(LATEST_SELL_PLANS)} — مفتوحة {open_count}")
         
+        # تشخيص إذا لا يوجد إشارات
+        if len(LATEST_PLANS) == 0 and len(LATEST_SELL_PLANS) == 0:
+            log(f"[DIAG] لا إشارات جديدة - الأسباب المحتملة:")
+            log(f"[DIAG] - فحص {res.get('gate',{}).get('checked',0)} عملة")
+            log(f"[DIAG] - مكرر {dup_count} (بصمات قديمة تحجب)")
+            log(f"[DIAG] - السوق هادئ RSI 45-72 + BO15 لم يتحقق")
+            log(f"[DIAG] - جرب /testsignal لإرسال إشارة تجريبية")
+            log(f"[DIAG] - أو شغل clear_inherited.py لمسح البصمات القديمة")
+        
         # إرسال الإشارات الجديدة فقط
         if LATEST_PLANS or LATEST_SELL_PLANS:
             for uid_str, user in list(load_state()["users"].items()):
@@ -1561,6 +1596,39 @@ def handle_text_message(msg: dict):
         handle_start(chat_id, chat.get("first_name",""), chat.get("username",""))
     elif low.startswith("/about"):
         send_msg(chat_id, ABOUT_TEXT, api_back_kb())
+    elif low.startswith("/testsignal"):
+        # إرسال إشارة تجريبية للتأكد أن البوت يرسل
+        try:
+            test_plan = {
+                "ticker": "BTCUSDT",
+                "price": 50000.0,
+                "signal_price": 50000.0,
+                "sl": 49000.0,
+                "tgt1": 51400.0,
+                "tgt2": 54000.0,
+                "size_pct": 1.5,
+                "frame": "1m",
+                "pool": "GS-T1",
+                "time": datetime.now(timezone.utc).isoformat()
+            }
+            # إنشاء بصمة جديدة
+            fp, raw = buy_fingerprint(test_plan)
+            BUY_FINGERPRINTS[fp] = {"time": _now_iso(), "ticker": "BTCUSDT", "price": 50000, "raw": raw}
+            save_fingerprints()
+            
+            # إنشاء صفقة مفتوحة
+            create_open_position(test_plan, datetime.now(timezone.utc))
+            
+            # تحديث LATEST
+            global LATEST_PLANS, LATEST_OPEN_POSITIONS
+            LATEST_PLANS = [test_plan]
+            LATEST_OPEN_POSITIONS = [p for p in get_open_positions() if p.get("status")=="OPEN" and (datetime.now(timezone.utc) - datetime.fromisoformat(p.get("entry_time",""))).total_seconds()/3600 <= 24]
+            
+            txt = latest_signals_text(u)
+            send_msg(chat_id, "🧪 <b>إشارة تجريبية - للتأكد أن البوت يرسل</b>\n━━━━━━━━━━━━━━\n" + txt, full_menu_kb(u))
+            log(f"[TEST SIGNAL] أرسل إشارة تجريبية لـ {chat_id}")
+        except Exception as e:
+            send_msg(chat_id, f"⚠️ خطأ في الإشارة التجريبية: {esc(str(e))}", full_menu_kb(u))
     elif low.startswith("/status") or low.startswith("/progress") or low == "حالة الجمع":
         status = get_data_collection_status()
         txt = (
