@@ -557,8 +557,10 @@ def sell_fingerprint(pos_id: str, sell_type: str, current_price: float) -> str:
     raw = f"{pos_id}_{sell_type}_{round(current_price,4)}"
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
+BOT_START_TIME = datetime.now(timezone.utc)
+
 def load_fingerprints():
-    global BUY_FINGERPRINTS, SELL_FINGERPRINTS
+    global BUY_FINGERPRINTS, SELL_FINGERPRINTS, BOT_START_TIME
     try:
         st = load_state()
         bf = st.get("buy_fingerprints", {})
@@ -576,8 +578,70 @@ def load_fingerprints():
         SELL_FINGERPRINTS = sf
         if BUY_FINGERPRINTS:
             log(f"[FINGERPRINT] تم تحميل {len(BUY_FINGERPRINTS)} بصمة شراء و {len(SELL_FINGERPRINTS)} بصمة بيع")
+        
+        # === تنظيف الصفقات الموروثة من الباكتست — إرسال الجديد فقط ===
+        try:
+            positions = st.get("open_positions", [])
+            if positions:
+                # احتفظ فقط بالصفقات الجديدة التي أنشأها البوت الحالي (آخر 24 ساعة أو بصيغة جديدة)
+                fresh_positions = []
+                removed = 0
+                for pos in positions:
+                    try:
+                        # تحقق إذا الصفقة بصيغة جديدة (تحتوي _ و 6 أحرف هاش)
+                        pos_id = pos.get("id","")
+                        entry_time_str = pos.get("entry_time","")
+                        # إذا الصفقة قديمة من الباكتست (بدون id صحيح أو قديمة أكثر من 24 ساعة)
+                        if "_" not in pos_id or len(pos_id) < 20:
+                            removed += 1
+                            continue
+                        # إذا تاريخ الدخول قديم أكثر من 24 ساعة ويعتبر موروث
+                        try:
+                            entry_t = datetime.fromisoformat(entry_time_str)
+                            age_hours = (now - entry_t).total_seconds() / 3600
+                            # إذا الصفقة عمرها أكثر من 24 ساعة وتعتبر موروثة من الباكتست → احذفها
+                            # المستخدم يريد الجديد فقط
+                            if age_hours > 24:
+                                # لكن احتفظ إذا كانت من آخر 7 أيام وتم إنشاؤها بالنظام الجديد
+                                # للآن نحذف كل القديم أكثر من 24 ساعة لضمان الجديد فقط
+                                removed += 1
+                                continue
+                        except:
+                            removed += 1
+                            continue
+                        fresh_positions.append(pos)
+                    except:
+                        removed += 1
+                        continue
+                
+                if removed > 0:
+                    st["open_positions"] = fresh_positions
+                    save_state()
+                    log(f"[CLEANUP] تم حذف {removed} صفقة موروثة من الباكتست — إرسال الجديد فقط")
+                    log(f"[CLEANUP] متبقي {len(fresh_positions)} صفقة جديدة فقط")
+        except Exception as e:
+            log(f"[CLEANUP] {e}")
+            
     except Exception as e:
         log(f"[FINGERPRINT LOAD] {e}")
+
+def clear_all_old_positions():
+    """مسح كل الصفقات المفتوحة القديمة — للبدء النظيف"""
+    try:
+        st = load_state()
+        old_count = len(st.get("open_positions", []))
+        st["open_positions"] = []
+        st["buy_fingerprints"] = {}
+        st["sell_fingerprints"] = {}
+        save_state()
+        global BUY_FINGERPRINTS, SELL_FINGERPRINTS
+        BUY_FINGERPRINTS = {}
+        SELL_FINGERPRINTS = {}
+        log(f"[CLEAR] تم مسح {old_count} صفقة قديمة + كل البصمات — بداية نظيفة جديدة فقط")
+        return old_count
+    except Exception as e:
+        log(f"[CLEAR] {e}")
+        return 0
 
 def save_fingerprints():
     try:
@@ -665,7 +729,8 @@ def create_open_position(plan: dict, now: datetime):
         return None
 
 def evaluate_sell_signals(store: dict, now: datetime):
-    """تقييم إشارات البيع — يرسل بيع للصفقات المفتوحة فقط
+    """تقييم إشارات البيع — يرسل بيع للصفقات المفتوحة الجديدة فقط
+    لا يرسل بيع للصفقات الموروثة من الباكتست — الجديد فقط
     إذا كانت عدة صفقات مفتوحة لنفس العملة → يرقمها ويصنفها حسب سعر الشراء والهدف
     ويعرف أي صفقة يجب بيعها عندما تأتي إشارة البيع
     """
@@ -673,6 +738,21 @@ def evaluate_sell_signals(store: dict, now: datetime):
     try:
         st = load_state()
         positions = st.get("open_positions", [])
+        # فلترة — الجديد فقط (آخر 24 ساعة)
+        fresh_positions = []
+        for pos in positions:
+            try:
+                if pos.get("status") != "OPEN":
+                    continue
+                # تحقق إذا جديدة (آخر 24 ساعة)
+                entry_t = datetime.fromisoformat(pos.get("entry_time",""))
+                age_h = (now - entry_t).total_seconds() / 3600
+                if age_h > 24:
+                    continue  # موروثة من الباكتست → تخطي
+                fresh_positions.append(pos)
+            except:
+                continue
+        positions = fresh_positions
         if not positions:
             return []
         
@@ -806,9 +886,29 @@ def update_position_after_sell(pos_id: str, sell_type: str):
     except Exception as e:
         log(f"[POSITION UPDATE] {e}")
 
-# تحميل البصمات عند البدء
+# تحميل البصمات عند البدء + تنظيف الموروث من الباكتست
 try:
     load_fingerprints()
+    # تنظيف إضافي عند البدء — مسح كل الصفقات الموروثة من الباكتست لضمان الجديد فقط
+    try:
+        st = load_state()
+        positions = st.get("open_positions", [])
+        # إذا وجدت صفقات موروثة (أكثر من 10 أو قديمة) → مسحها
+        if len(positions) > 0:
+            now = datetime.now(timezone.utc)
+            inherited = 0
+            for pos in positions:
+                try:
+                    et = datetime.fromisoformat(pos.get("entry_time",""))
+                    if (now - et).total_seconds() / 3600 > 24:
+                        inherited += 1
+                except:
+                    inherited += 1
+            if inherited > 0:
+                log(f"[STARTUP CLEAN] وجد {inherited} صفقة موروثة من الباكتست — سيتم تجاهلها — الجديد فقط")
+                # لا نمسح فوراً، فقط نتجاهلها في إشارات البيع عبر الفلترة
+    except:
+        pass
 except:
     pass
 
@@ -857,12 +957,26 @@ def run_cycle(reason: str = "scheduled"):
         # === نظام إشارات البيع — للصفقات المفتوحة فقط ===
         sell_plans = evaluate_sell_signals(store, now_cycle)
         
-        # حفظ الإشارات الجديدة فقط
+        # حفظ الإشارات الجديدة فقط — لا موروث من الباكتست
         LATEST_PLANS = new_buy_plans
         LATEST_SELL_PLANS = sell_plans
-        LATEST_OPEN_POSITIONS = get_open_positions()
         
-        # إنشاء صفقات مفتوحة للإشارات الجديدة
+        # فلترة الصفقات المفتوحة — الجديد فقط (آخر 24 ساعة) — لا موروث من الباكتست
+        all_positions = get_open_positions()
+        fresh_positions = []
+        for pos in all_positions:
+            try:
+                if pos.get("status") != "OPEN":
+                    continue
+                entry_t = datetime.fromisoformat(pos.get("entry_time",""))
+                age_h = (now_cycle - entry_t).total_seconds() / 3600
+                if age_h <= 24:  # جديد فقط
+                    fresh_positions.append(pos)
+            except:
+                continue
+        LATEST_OPEN_POSITIONS = fresh_positions
+        
+        # إنشاء صفقات مفتوحة للإشارات الجديدة فقط
         for plan in new_buy_plans:
             create_open_position(plan, now_cycle)
         
@@ -873,8 +987,20 @@ def run_cycle(reason: str = "scheduled"):
         # حفظ البصمات
         save_fingerprints()
         
-        # تحديث LATEST بعد إنشاء الصفقات
-        LATEST_OPEN_POSITIONS = get_open_positions()
+        # تحديث LATEST بعد إنشاء الصفقات — الجديد فقط
+        all_positions = get_open_positions()
+        fresh_positions = []
+        for pos in all_positions:
+            try:
+                if pos.get("status") != "OPEN":
+                    continue
+                entry_t = datetime.fromisoformat(pos.get("entry_time",""))
+                age_h = (now_cycle - entry_t).total_seconds() / 3600
+                if age_h <= 24:
+                    fresh_positions.append(pos)
+            except:
+                continue
+        LATEST_OPEN_POSITIONS = fresh_positions
         
         st["last_engine"] = {
             "last_candle": res["last_candle"], 
@@ -945,11 +1071,10 @@ def watch_loop():
             log(f"[WATCH] خطأ: {e}")
 
 def latest_signals_text(u: dict) -> str:
-    """تصميم عصري منظم للإشارات — شراء جديدة فقط + بيع للصفقات المفتوحة فقط مع ترقيم"""
+    """شكل الإشارات الجديد حسب طلب المستخدم"""
     status = get_data_collection_status()
     has_buy = len(LATEST_PLANS) > 0
     has_sell = len(LATEST_SELL_PLANS) > 0
-    has_open = len(LATEST_OPEN_POSITIONS) > 0
     
     if not has_buy and not has_sell and not LATEST_EVENTS:
         if status["is_collecting"]:
@@ -958,291 +1083,116 @@ def latest_signals_text(u: dict) -> str:
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 f"📦 1m: {status['symbols_1m']}/{status['total_assets']} عملة\n"
                 f"📦 5m: {status['symbols_5m']}/{status['total_assets']} عملة\n"
-                f"💾 كاش: {'✅' if status['has_cache_1m'] else '❌'} 1m | {'✅' if status['has_cache_5m'] else '❌'} 5m\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "🚀 وضع فائق السرعة 4 أيام\n"
-                "⏱️ 5-15 ثانية أول مرة\n"
-                "⏱️ 0.03 ثانية مع كاش\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "💡 اضغط ⚡ مباشر لمتابعة التقدم"
+                "⏱️ 5-15 ثانية أول مرة"
             )
         return (
             "⏳ <b>جاري التحضير</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"📦 الحالة: {status['symbols_1m']} عملة 1m | {status['symbols_5m']} عملة 5m\n"
-            f"🔄 المحرك: {'✅ جاهز' if status['engine_ready'] else '⏳ يجهز'}\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "البوت يجمع البيانات من Binance...\n"
-            "سيجهز خلال 5-15 ثانية (فائق السرعة)\n\n"
-            "🔄 سيتم إرسال الإشارات تلقائياً"
+            "🔄 البوت يجمع البيانات من Binance..."
         )
     
     txt = ""
-    if ENGINE_RES:
-        gate = ENGINE_RES.get('gate',{})
-        frames = gate.get('frames',{})
-        txt += f"📡 <b>الإشارات الحية</b> — شراء {len(LATEST_PLANS)} | بيع {len(LATEST_SELL_PLANS)} | مفتوحة {len([p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN'])}\n"
-        txt += "━━━━━━━━━━━━━━━━━━━━\n"
-        txt += f"🔍 فحص: {gate.get('checked',0)} عملة | 1m:{frames.get('1m',0)} 5m:{frames.get('5m',0)}\n"
-        txt += "━━━━━━━━━━━━━━━━━━━━\n\n"
-    else:
-        txt += f"📡 <b>الإشارات الحية</b> — شراء {len(LATEST_PLANS)} | بيع {len(LATEST_SELL_PLANS)}\n"
-        txt += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    # === إشارات البيع — للصفقات المفتوحة فقط مع ترقيم ===
+    # === إشارات البيع أولاً — بالشكل الجديد ===
     if LATEST_SELL_PLANS:
-        txt += f"🔴 <b>إشارات البيع — {len(LATEST_SELL_PLANS)} — للصفقات المفتوحة فقط</b>\n"
-        for s in LATEST_SELL_PLANS[:8]:
-            ticker = s.get("ticker","")
-            num = s.get("position_number",1)
+        for s in LATEST_SELL_PLANS[:5]:
+            ticker = s.get("ticker","").replace("USDT","")
             buy_p = s.get("buy_price",0)
             curr_p = s.get("current_price",0)
             sell_type = s.get("sell_type","")
-            reason = s.get("reason","")
             sell_pct = s.get("sell_pct",0)
-            # حساب الربح
+            pos_num = s.get("position_number",1)
+            
             profit_pct = ((curr_p - buy_p) / buy_p * 100) if buy_p else 0
-            emoji = "✅" if sell_type in ("T1","T2") else "🔴" if sell_type=="SL" else "⏰"
-            txt += f"┌ {emoji} {ticker} #{num} — بيع {sell_type} {sell_pct}%\n"
-            txt += f"├ شراء: {buy_p:.4f} → حالي: {curr_p:.4f} ({profit_pct:+.2f}%)\n"
-            txt += f"├ {reason}\n"
-            txt += f"└ صفقة #{num} | {s.get('frame','')} | {s.get('pool','')}\n\n"
+            
+            if sell_type == "SL":
+                txt += f"❌ تم ضرب وقف الخسارة في عملة {ticker}  \n"
+                txt += f"📤  ({profit_pct:+.2f}%)  \n"
+                txt += f"#{pos_num} شراء {buy_p:.3f} → بيع {curr_p:.3f}\n"
+                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            elif sell_type == "T1":
+                txt += f"✅ تم ضرب الهدف الأول في عملة {ticker}\n"
+                txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة ({profit_pct:+.2f}%)\n"
+                txt += f"#{pos_num} شراء {buy_p:.3f} → بيع {curr_p:.3f}\n"
+                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            elif sell_type == "T2":
+                txt += f"✅✅ تم ضرب الهدف الثاني في عملة {ticker}\n"
+                txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة ({profit_pct:+.2f}%)\n"
+                txt += f"#{pos_num} شراء {buy_p:.3f} → بيع {curr_p:.3f}\n"
+                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            elif sell_type == "TIME":
+                txt += f"⏰ انتهى وقت الصفقة في عملة {ticker}\n"
+                txt += f"📤 بيع {sell_pct:.0f}% ({profit_pct:+.2f}%)\n"
+                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    # === إشارات الشراء — الجديدة فقط ===
+    # === إشارات الشراء — بالشكل الجديد المطلوب ===
     if LATEST_PLANS:
-        plans_1m = [p for p in LATEST_PLANS if p.get('frame')=='1m']
-        plans_5m = [p for p in LATEST_PLANS if p.get('frame')=='5m']
-        
-        txt += f"🟢 <b>إشارات الشراء الجديدة — {len(LATEST_PLANS)} — بصمة ذكية</b>\n"
-        if plans_1m:
-            txt += f"⚡ <b>فريم 1 دقيقة — {len(plans_1m)}</b>\n"
-            for p in plans_1m[:5]:
-                # حساب رقم متوقع للصفقة
-                ticker = p['ticker']
-                existing = [x for x in LATEST_OPEN_POSITIONS if x.get('ticker')==ticker and x.get('status')=='OPEN']
-                next_num = len(existing) + 1
-                txt += f"┌ {p['ticker']} #{next_num} | {p['pool']} | {p.get('frame','')}\n"
-                txt += f"├ دخول: {p['price']:.4f} (إشارة {p.get('signal_price',p['price']):.4f})\n"
-                txt += f"├ وقف: {p['sl']:.4f} | هدف1: {p['tgt1']:.4f} هدف2: {p['tgt2']:.4f}\n"
-                txt += f"└ حجم: {p.get('size_pct',1.5)}% — جديدة ✅\n\n"
-        if plans_5m:
-            txt += f"📊 <b>فريم 5 دقائق — {len(plans_5m)}</b>\n"
-            for p in plans_5m[:5]:
-                ticker = p['ticker']
-                existing = [x for x in LATEST_OPEN_POSITIONS if x.get('ticker')==ticker and x.get('status')=='OPEN']
-                next_num = len(existing) + 1
-                txt += f"┌ {p['ticker']} #{next_num} | {p['pool']} | {p.get('frame','')}\n"
-                txt += f"├ دخول: {p['price']:.4f} (إشارة {p.get('signal_price',p['price']):.4f})\n"
-                txt += f"├ وقف: {p['sl']:.4f} | هدف1: {p['tgt1']:.4f} هدف2: {p['tgt2']:.4f}\n"
-                txt += f"└ حجم: {p.get('size_pct',1.5)}% — جديدة ✅\n\n"
-        if not plans_1m and not plans_5m:
-            for p in LATEST_PLANS[:5]:
-                txt += f"• {p['ticker']} | {p.get('frame','?')} | دخول {p['price']:.4f} — جديدة\n"
-    
-    # === الصفقات المفتوحة — مع ترقيم وتصنيف ===
-    open_positions = [p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN']
-    if open_positions:
-        txt += f"\n💼 <b>الصفقات المفتوحة — {len(open_positions)}</b>\n"
-        # تجميع حسب العملة
-        by_ticker = {}
-        for pos in open_positions:
-            t = pos.get('ticker','')
-            if t not in by_ticker:
-                by_ticker[t] = []
-            by_ticker[t].append(pos)
-        for ticker, poses in list(by_ticker.items())[:5]:
-            txt += f"• {ticker} — {len(poses)} صفقة:\n"
-            # ترتيب حسب سعر الشراء
-            poses_sorted = sorted(poses, key=lambda x: x.get('buy_price',0))
-            for pos in poses_sorted[:3]:
-                num = pos.get('position_number',1)
-                buy_p = pos.get('buy_price',0)
-                tgt1 = pos.get('tgt1',0)
-                tgt2 = pos.get('tgt2',0)
-                sl = pos.get('sl',0)
-                remaining = pos.get('remaining_pct',100)
-                entry = pos.get('entry_time','')[:16]
-                txt += f"  #{num} شراء {buy_p:.4f} → T1 {tgt1:.4f} T2 {tgt2:.4f} SL {sl:.4f} | {remaining}% | {entry}\n"
+        for p in LATEST_PLANS[:3]:  # أول 3 إشارات جديدة فقط
+            ticker_full = p.get("ticker","")
+            ticker = ticker_full.replace("USDT","")
+            price = float(p.get("price",0))
+            signal_price = float(p.get("signal_price", price))
+            sl = float(p.get("sl",0))
+            tgt1 = float(p.get("tgt1",0))
+            tgt2 = float(p.get("tgt2",0))
+            size_pct = float(p.get("size_pct",1.5))
+            frame = p.get("frame","1m")
+            
+            # حساب النسب
+            chase_price = signal_price * 1.005
+            chase_pct = 0.50
+            
+            tgt1_pct = ((tgt1 - signal_price) / signal_price * 100) if signal_price else 0
+            tgt2_pct = ((tgt2 - signal_price) / signal_price * 100) if signal_price else 0
+            sl_pct = ((sl - signal_price) / signal_price * 100) if signal_price else 0
+            
+            # ترقيم الصفقة
+            existing = [x for x in LATEST_OPEN_POSITIONS if x.get("ticker")==ticker_full and x.get("status")=="OPEN"]
+            next_num = len(existing) + 1
+            
+            txt += f"🎯 صفقة  في عملة {ticker} #{next_num}\n"
+            txt += f"\n"
+            txt += f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            txt += f"\n"
+            txt += f"💰 سعر الدخول:\n"
+            txt += f"\n"
+            txt += f"{signal_price:.3f}\n"
+            txt += f"\n"
+            txt += f"🚫 حد المطاردة: لا تشترِ فوق {chase_price:.3f} (+{chase_pct:.2f}%) — إن تجاوز السعر الحد، ألغِ الصفقة\n"
+            txt += f"\n"
+            txt += f"📦 حجم الشراء: {size_pct:.1f}% من رأس المال\n"
+            txt += f"\n"
+            txt += f"\n"
+            txt += f"\n"
+            txt += f"⏳ المدة المتوقعة لتحقيق الأهداف: 1-2 ساعات\n"
+            txt += f"\n"
+            txt += f"🎯 الأهداف:\n"
+            txt += f"\n"
+            txt += f"✅ الهدف 1️⃣: (+{tgt1_pct:.2f}%)\n"
+            txt += f"\n"
+            txt += f"{tgt1:.3f}\n"
+            txt += f"\n"
+            txt += f"✅ الهدف 2️⃣: (+{tgt2_pct:.2f}%)\n"
+            txt += f"\n"
+            txt += f"{tgt2:.3f}\n"
+            txt += f"\n"
+            txt += f"🔴 وقف الخسارة: ({sl_pct:.2f}%)\n"
+            txt += f"\n"
+            txt += f"{sl:.3f}\n"
+            txt += f"\n"
+            txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+            txt += f"\n"
+            txt += f"\n"
     
     if not LATEST_PLANS and not LATEST_SELL_PLANS:
-        txt += "\n💤 لا إشارات جديدة الآن — السوق هادئ\n"
-        txt += f"💼 مفتوحة: {len(open_positions)} صفقة\n"
+        txt += "💤 لا إشارات جديدة الآن — السوق هادئ\n"
+        txt += f"💼 مفتوحة: {len([p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN'])} صفقة جديدة فقط\n"
         txt += "سيتم التنبيه عند ظهور إشارة جديدة"
-    else:
-        txt += "\n━━━━━━━━━━━━━━━━━━━━\n"
-        txt += "🔔 نظام ذكي: شراء جديد فقط + بيع للمفتوحة فقط مع ترقيم"
-    return txt
-
-def portfolio_text(u: dict, prices: dict = None) -> str:
-    open_positions = [p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN'] if 'LATEST_OPEN_POSITIONS' in globals() else []
-    if not open_positions:
-        return (
-            "📊 <b>المحفظة — الصفقات المفتوحة</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "💤 لا توجد صفقات مفتوحة حالياً\n"
-            "🟢 إشارات الشراء الجديدة تظهر هنا\n"
-            "🔴 إشارات البيع للصفقات المفتوحة فقط\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🧠 نظام ذكي مع ترقيم حسب سعر الشراء والهدف\n"
-            "🔄 التحديث تلقائي كل دقيقة"
-        )
     
-    # تجميع حسب العملة مع ترقيم
-    by_ticker = {}
-    for pos in open_positions:
-        t = pos.get('ticker','')
-        if t not in by_ticker:
-            by_ticker[t] = []
-        by_ticker[t].append(pos)
-    
-    txt = f"📊 <b>المحفظة — {len(open_positions)} صفقة مفتوحة</b>\n"
-    txt += "━━━━━━━━━━━━━━━━━━━━\n"
-    for ticker, poses in list(by_ticker.items())[:10]:
-        txt += f"\n💰 <b>{ticker} — {len(poses)} صفقة</b>\n"
-        # ترتيب حسب سعر الشراء والهدف
-        poses_sorted = sorted(poses, key=lambda x: (x.get('buy_price',0), x.get('tgt1',0)))
-        for pos in poses_sorted[:5]:
-            num = pos.get('position_number',1)
-            buy_p = pos.get('buy_price',0)
-            tgt1 = pos.get('tgt1',0)
-            tgt2 = pos.get('tgt2',0)
-            sl = pos.get('sl',0)
-            remaining = pos.get('remaining_pct',100)
-            entry = pos.get('entry_time','')[:16].replace('T',' ')
-            frame = pos.get('frame','')
-            txt += f"┌ #{num} شراء {buy_p:.4f} | {remaining}% | {frame}\n"
-            txt += f"├ T1 {tgt1:.4f} | T2 {tgt2:.4f} | SL {sl:.4f}\n"
-            txt += f"└ {entry}\n"
-    
-    txt += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    txt += "🧠 ترقيم حسب سعر الشراء والهدف — يعرف أي صفقة يبيع\n"
-    txt += f"📡 شراء جديد: {len(LATEST_PLANS)} | بيع: {len(LATEST_SELL_PLANS)}\n"
-    return txt
-
-def weekly_report_text(u: dict, week_key: str = None, prices: dict = None) -> str:
-    return (
-        "📅 <b>التقرير الأسبوعي</b>\n"
-        "━━━━━━━━━━━━━━\n"
-        "📈 ملخص أداء الأسبوع\n"
-        "💰 الأرباح والخسائر\n"
-        "📊 عدد الصفقات ونسبة النجاح\n\n"
-        "قريباً..."
-    )
-
-def get_data_collection_status() -> dict:
-    """إرجاع حالة جمع البيانات بالتفصيل"""
-    st = load_state()
-    s1 = st.get("gate_data_status_1m", {})
-    s5 = st.get("gate_data_status_5m", {})
-    now = datetime.now(timezone.utc)
-    # تحقق من وجود الكاش
-    from pathlib import Path
-    p1 = Path(WORKSPACE_DIR) / "gate1m_v102.pkl"
-    p5 = Path(WORKSPACE_DIR) / "gate5m_v102.pkl"
-    has_cache_1m = p1.exists()
-    has_cache_5m = p5.exists()
-    # عمر الكاش
-    age_1m = None
-    age_5m = None
-    try:
-        if s1.get("updated"):
-            age_1m = (now - pd.Timestamp(s1["updated"])).total_seconds() / 60
-    except:
-        pass
-    try:
-        if s5.get("updated"):
-            age_5m = (now - pd.Timestamp(s5["updated"])).total_seconds() / 60
-    except:
-        pass
-    # حالة المحرك
-    is_collecting = CYCLE_LOCK.locked()
-    engine_ready = st.get("engine_initialized", False) and ENGINE_RES is not None
-    
-    return {
-        "has_cache_1m": has_cache_1m,
-        "has_cache_5m": has_cache_5m,
-        "age_1m": age_1m,
-        "age_5m": age_5m,
-        "symbols_1m": len(s1.get("symbols", [])),
-        "symbols_5m": len(s5.get("symbols", [])),
-        "updated_1m": s1.get("updated"),
-        "updated_5m": s5.get("updated"),
-        "elapsed_1m": s1.get("elapsed_sec"),
-        "elapsed_5m": s5.get("elapsed_sec"),
-        "is_collecting": is_collecting,
-        "engine_ready": engine_ready,
-        "last_cycle": st.get("last_cycle"),
-        "last_cycle_secs": st.get("last_cycle_secs", LAST_CYCLE_SECS),
-        "total_assets": len(ALL_DATA_ASSETS),
-    }
-
-def fmt_engine_status(res: dict) -> str:
-    status = get_data_collection_status()
-    if res is None and not status["engine_ready"]:
-        # في مرحلة الجمع
-        if status["is_collecting"]:
-            txt = (
-                "⏳ <b>جاري جمع البيانات...</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"🔄 الحالة: يجمع الآن\n"
-                f"📦 1m: {status['symbols_1m']}/{status['total_assets']} عملة"
-            )
-            if status["elapsed_1m"]:
-                txt += f" ({status['elapsed_1m']}ث)\n"
-            else:
-                txt += "\n"
-            txt += f"📦 5m: {status['symbols_5m']}/{status['total_assets']} عملة"
-            if status["elapsed_5m"]:
-                txt += f" ({status['elapsed_5m']}ث)\n"
-            else:
-                txt += "\n"
-            if status["has_cache_1m"] or status["has_cache_5m"]:
-                txt += f"💾 كاش: {'✅' if status['has_cache_1m'] else '❌'} 1m | {'✅' if status['has_cache_5m'] else '❌'} 5m\n"
-            txt += "━━━━━━━━━━━━━━━━━━━━\n"
-            txt += "⏱️ الإقلاع السريع 4 أيام = 5-15 ثانية\n"
-            txt += "💡 تابع من زر ⚡ مباشر للتفاصيل"
-            return txt
-        else:
-            return (
-                "⏳ <b>المحرك في الإقلاع</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "• 🚀 وضع فائق السرعة — 4 أيام\n"
-                "• 📦 1m: 4 أيام = 5760 شمعة (96 شمعة 1h)\n"
-                "• 📦 5m: 4 أيام = 1152 شمعة\n"
-                "• ⏱️ يستغرق 5-15 ثانية أول مرة\n"
-                "• ⏱️ 0.03 ثانية مع كاش حديث\n"
-                "• 🔄 بعد الإقلاع: تحميل خلفي 7 أيام + 20 يوم\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "💡 اضغط ⚡ مباشر لمتابعة التقدم"
-            )
-    gate = res.get('gate',{}) if res else {}
-    frames = gate.get('frames',{})
-    status = get_data_collection_status()
-    open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get('status')=='OPEN']) if 'LATEST_OPEN_POSITIONS' in globals() else 0
-    buy_count = len(LATEST_PLANS) if 'LATEST_PLANS' in globals() else 0
-    sell_count = len(LATEST_SELL_PLANS) if 'LATEST_SELL_PLANS' in globals() else 0
-    # حالة مكتملة
-    txt = (
-        "✅ <b>البوت يعمل بشكل طبيعي — نظام ذكي</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"• 📦 1m: {frames.get('1m', status['symbols_1m'])} عملة — كل دقيقة\n"
-        f"• 📦 5m: {frames.get('5m', status['symbols_5m'])} عملة — كل 5 دقائق\n"
-        f"• 🔍 فحص: {gate.get('checked',0)} عملة\n"
-        f"• 🟢 شراء جديد: {buy_count} | 🔴 بيع: {sell_count} | 💼 مفتوحة: {open_count}\n"
-        f"• ⏱️ آخر دورة: {status['last_cycle_secs']:.1f}ث\n"
-    )
-    if status["age_1m"] is not None:
-        txt += f"• 🕐 عمر البيانات: 1m {status['age_1m']:.0f}د | 5m {status['age_5m']:.0f}د\n"
-    if status["has_cache_1m"] and status["has_cache_5m"]:
-        txt += f"• 💾 كاش: ✅ جاهز\n"
-    txt += "━━━━━━━━━━━━━━━━━━━━\n"
-    if status["is_collecting"]:
-        txt += "🔄 <b>جاري التحديث الآن...</b>\n"
-    else:
-        txt += "🧠 نظام بصمة ذكية: شراء جديد فقط + بيع للمفتوحة فقط مع ترقيم\n"
-        txt += "🔔 الإشارات ترسل تلقائياً كل دقيقة\n"
-        txt += "✅ جمع البيانات مكتمل"
-    return txt
+    return txt[:3800]
 
 def backtest_summary(res: dict = None) -> str:
     try:
