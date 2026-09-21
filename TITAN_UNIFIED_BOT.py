@@ -552,8 +552,10 @@ SELL_FINGERPRINTS = {}  # fingerprint -> {time}
 
 def buy_fingerprint(plan: dict) -> tuple:
     """بصمة ذكية للإشارة — تحدد إذا كانت جديدة فعلاً
-    البصمة = العملة + السعر + الوقف + الأهداف + الفريم
-    إذا تغير أي شيء → إشارة جديدة حقيقية
+    البصمة = العملة + السعر + الوقف + الأهداف + الفريم + الساعة
+    - نفس العملة نفس السعر نفس المستويات في نفس الساعة → مكررة → تخطي
+    - نفس العملة سعر مختلف أو ساعة مختلفة → جديدة → إرسال
+    هذا يضمن: لا إرسال كل دقيقة، لكن يرسل كل ساعة إذا تغير السوق
     """
     try:
         ticker = plan.get("ticker","")
@@ -562,10 +564,23 @@ def buy_fingerprint(plan: dict) -> tuple:
         tgt1 = round(float(plan.get("tgt1",0)), 4)
         tgt2 = round(float(plan.get("tgt2",0)), 4)
         frame = plan.get("frame","")
-        raw = f"{ticker}_{price}_{sl}_{tgt1}_{tgt2}_{frame}"
+        # إضافة الساعة لضمان إرسال جديد كل ساعة حتى لو نفس السعر
+        try:
+            # من plan time أو الآن
+            time_str = plan.get("time","")
+            if time_str:
+                dt = datetime.fromisoformat(time_str.replace("Z","+00:00"))
+                hour_key = dt.strftime("%Y-%m-%d-%H")
+            else:
+                hour_key = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H")
+        except:
+            hour_key = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H")
+        
+        raw = f"{ticker}_{price}_{sl}_{tgt1}_{tgt2}_{frame}_{hour_key}"
         fp = hashlib.sha1(raw.encode()).hexdigest()[:16]
         return fp, raw
-    except:
+    except Exception as e:
+        log(f"[FP] {e}")
         return hashlib.sha1(str(plan).encode()).hexdigest()[:16], str(plan)
 
 def sell_fingerprint(pos_id: str, sell_type: str, current_price: float) -> str:
@@ -670,9 +685,8 @@ def save_fingerprints():
 
 def filter_new_buy_signals(plans: list) -> tuple:
     """يقرأ الإشارات في كل مرة ويحدد الجديدة فقط — نظام ذكي
-    يميز الإشارة الجديدة فعلاً عبر البصمة (السعر+الوقف+الأهداف+الفريم)
-    - نفس العملة بنفس السعر والمستويات → مكررة → تخطي
-    - نفس العملة بسعر مختلف أو مستويات مختلفة → جديدة → إرسال
+    - نفس العملة بنفس السعر والمستويات في نفس الساعة → مكررة → تخطي (يمنع كل دقيقة)
+    - نفس العملة سعر مختلف أو ساعة مختلفة → جديدة → إرسال (حتى لو بعد ساعة)
     """
     new_plans = []
     dup_count = 0
@@ -681,12 +695,18 @@ def filter_new_buy_signals(plans: list) -> tuple:
         fp, raw = buy_fingerprint(plan)
         if fp in BUY_FINGERPRINTS:
             dup_count += 1
+            log(f"[FILTER] مكررة {plan.get('ticker')} {raw} → تخطي")
             continue
         # جديدة
         BUY_FINGERPRINTS[fp] = {"time": now_iso, "ticker": plan.get("ticker"), "price": plan.get("signal_price", plan.get("price")), "raw": raw}
         new_plans.append(plan)
-    if dup_count:
-        log(f"[SMART FILTER] {len(plans)} إشارة → {len(new_plans)} جديدة، {dup_count} مكررة تم تخطيها")
+        log(f"[FILTER] جديدة {plan.get('ticker')} {raw} → إرسال")
+    
+    if len(plans) > 0:
+        log(f"[SMART FILTER] {len(plans)} إشارة → {len(new_plans)} جديدة، {dup_count} مكررة")
+    else:
+        log(f"[SMART FILTER] لا إشارات من المحرك — السوق هادئ أو لا يوجد كسر RSI+BO")
+    
     return new_plans, dup_count
 
 # === نظام تتبع الصفقات المفتوحة والبيع ===
