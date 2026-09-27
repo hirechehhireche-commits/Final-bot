@@ -1,0 +1,35 @@
+{
+  "users": {},
+  "seen_events": [],
+  "alerted": {},
+  "engine_initialized": false,
+  "last_cycle": null,
+  "last_metrics": {
+    "total_ret": 13749900,
+    "n_trades": 14700,
+    "sharpe": 23.2,
+    "max_dd": 0.0007,
+    "final_nav": 55000000,
+    "total_days": 1826,
+    "period_start": "2021-09-01",
+    "period_end": "2026-08-31",
+    "pf": 37318.0
+  },
+  "admin_chat_id": null,
+  "global_snapshots": {},
+  "allowed": [],
+  "pending": {},
+  "locked_notified": [],
+  "strategy_id": "simple-dual-1m-5m",
+  "buy_fingerprints": {},
+  "sell_fingerprints": {},
+  "open_positions": [],
+  "sent_signals": {},
+  "paper": {
+    "initial_capital": 400.0,
+    "cash": 400.0,
+    "realized_pnl": 0.0,
+    "closed_deals": [],
+    "since": "2026-09-27T00:00:00"
+  }
+}
