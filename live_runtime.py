@@ -258,19 +258,7 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                     B.save_state()
                     raw=str(e)
                     if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                        import re, datetime
-                        ban_detail = ""
-                        m = re.search(r'banned until (\d+)', raw)
-                        if m:
-                            until_ts = int(m.group(1)) / 1000
-                            rem = until_ts - time.time()
-                            if rem > 0:
-                                mins = int(rem // 60)
-                                secs = int(rem % 60)
-                                ban_detail = f"\n⏱️ <b>ينتهي حظر السيرفر تلقائياً بعد {mins} دقيقة و {secs} ثانية</b> ({datetime.datetime.fromtimestamp(until_ts, datetime.timezone.utc).strftime('%H:%M:%S')} UTC)"
-                            else:
-                                ban_detail = "\n✅ <b>انتهت مهلة الحظر الآن، أعد المحاولة فوراً!</b>"
-                        err=f'⏳ Binance مشغول حالياً (كثرة الطلبات -1003){ban_detail}\n\n• السبب: السيرفر كان يرسل طلبات سابقة مكثفة لجلب البيانات\n• الحل: انتظر انتهاء المهلة الموضحة ثم أعد إرسال المفتاح\n• تفاصيل الخطأ: {B.esc(raw[:200])}'
+                        err='⏳ Binance مشغول حالياً (كثرة الطلبات -1003)\n\n• السبب: السيرفر يرسل كثير طلبات بيانات السوق + طلب التحقق في نفس اللحظة\n• الحل: انتظر دقيقة واحدة ثم أعد المحاولة\n• تأكد أيضاً:\n  - المفتاح Spot فقط بلا سحب\n  - IP الخادم مضاف في قائمة IP المسموحة (إن كنت مفعل IP Restriction)\n  - أو عطّل IP Restriction مؤقتاً للتجربة\n\nسيتم حل المشكلة تلقائياً بعد دقيقة.'
                     else:
                         err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                     B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
@@ -342,19 +330,7 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                 B.save_state()
                 raw=str(e)
                 if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                    import re, datetime
-                    ban_detail = ""
-                    m = re.search(r'banned until (\d+)', raw)
-                    if m:
-                        until_ts = int(m.group(1)) / 1000
-                        rem = until_ts - time.time()
-                        if rem > 0:
-                            mins = int(rem // 60)
-                            secs = int(rem % 60)
-                            ban_detail = f"\n⏱️ ينتهي الحظر تلقائياً بعد {mins}د و {secs}ث"
-                        else:
-                            ban_detail = "\n✅ انتهت مهلة الحظر، أعد المحاولة فوراً!"
-                    err=f'⏳ Binance مشغول (كثرة الطلبات -1003){ban_detail}\n• تفاصيل: {B.esc(raw[:200])}'
+                    err='⏳ Binance مشغول (كثرة الطلبات -1003) — انتظر دقيقة وأعد المحاولة.\n• أضف IP الخادم في whitelist أو عطّل IP Restriction مؤقتاً.'
                 else:
                     err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                 B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
@@ -480,23 +456,14 @@ def callback(cb,u):
         elif data=='api:del':
             EXEC.disconnect(uid);B.respond_cb(cb,'🗑️ حُذف الربط بعد التأكد من عدم وجود مراكز نشطة.',keyboard(u))
         elif data=='api:bal':
+            bals=EXEC.client(account(uid)).balances()
+            text='💼 <b>الأرصدة الحرة على Binance</b>\n'+'\n'.join(f'{B.esc(s)}: {q}' for s,q in bals.items() if q>0)
             try:
-                bals=EXEC.client(account(uid)).balances()
-                pos_bals = [f'• <b>{B.esc(s)}</b>: <code>{q:g}</code>' for s,q in sorted(bals.items()) if q>0]
-                text='💼 <b>الأرصدة الحرة على Binance</b>\n'
-                if pos_bals:
-                    text += '\n'.join(pos_bals)
-                else:
-                    text += '• المحفظة الفورية لا تحتوي على أرصدة حرة حالياً.'
-                try:
-                    total_eq, free, used = EXEC.get_total_equity(account(uid), EXEC.client(account(uid)))
-                    text+=f'\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>إجمالي المحفظة:</b> <code>{total_eq:.2f} USDT</code>\n• رصيد حر: <code>{free:.2f} USDT</code>\n• مستخدم: <code>{used:.2f} USDT</code>'
-                except Exception:
-                    pass
-                B.respond_cb(cb,text[:3800],keyboard(u))
-            except Exception as e:
-                text=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
-                B.respond_cb(cb,'⚠️ خطأ جلب الرصيد: '+B.esc(text),keyboard(u))
+                total_eq, free, used = EXEC.get_total_equity(account(uid), EXEC.client(account(uid)))
+                text+=f'\n\n📊 إجمالي تراكمي: {total_eq:.2f} USDT | حر: {free:.2f} | مستخدم: {used:.2f}'
+            except:
+                pass
+            B.respond_cb(cb,text[:3800],keyboard(u))
         elif data=='api:orders':
             a=account(uid)
             lines=['📂 <b>دفتر التنفيذ الفعلي للبوت — v241 سهل+تراكمي</b>']
