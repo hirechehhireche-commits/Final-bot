@@ -482,17 +482,36 @@ def callback(cb,u):
         elif data=='api:bal':
             try:
                 bals=EXEC.client(account(uid)).balances()
-                text='💼 <b>الأرصدة الحرة على Binance</b>\n'+'\n'.join(f'{B.esc(s)}: {q}' for s,q in bals.items() if q>0)
+                pos_bals = [f'• <b>{B.esc(s)}</b>: <code>{q:g}</code>' for s,q in sorted(bals.items()) if q>0]
+                text='💼 <b>الأرصدة الحرة على Binance</b>\n'
+                if pos_bals:
+                    text += '\n'.join(pos_bals)
+                else:
+                    text += '• المحفظة الفورية لا تحتوي على أرصدة حرة حالياً.'
                 try:
                     total_eq, free, used = EXEC.get_total_equity(account(uid), EXEC.client(account(uid)))
-                    text+=f'\n\n📊 إجمالي تراكمي: {total_eq:.2f} USDT | حر: {free:.2f} | مستخدم: {used:.2f}'
+                    text+=f'\n\n━━━━━━━━━━━━━━━━━━━━\n📊 <b>إجمالي المحفظة:</b> <code>{total_eq:.2f} USDT</code>\n• رصيد حر: <code>{free:.2f} USDT</code>\n• مستخدم: <code>{used:.2f} USDT</code>'
                 except Exception:
                     pass
                 B.respond_cb(cb,text[:3800],keyboard(u))
             except Exception as e:
                 raw=str(e)
-                if '-1003' in raw or 'كثرة الطلبات' in raw or 'IP banned' in raw:
-                    B.respond_cb(cb,'⏳ سيرفر Binance مشغول حالياً لـ IP الاستضافة (-1003) — انتظر دقيقة ثم اضغط 👁️ أرصدتي مرة أخرى.',keyboard(u))
+                try:
+                    import binance_spot
+                    rem, mins, secs = binance_spot.get_remaining_ban_time()
+                except Exception:
+                    rem, mins, secs = 0, 0, 0
+                if rem > 0 or 'IP_BANNED_COOLDOWN' in raw or '-1003' in raw or 'كثرة الطلبات' in raw or 'banned' in raw:
+                    time_str = f"<b>{mins} دقيقة و {secs} ثانية</b>" if rem > 0 else "<b>دقيقة واحدة</b>"
+                    cooldown_text = (
+                        f"⏳ <b>فترة تهدئة أمان Binance سارية حالياً</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⏰ <b>الوقت المتبقي لانتهاء التهدئة:</b> {time_str}\n\n"
+                        f"🛡️ <b>درع الصمت مفعل تلقائياً:</b>\n"
+                        f"البوت يحمي اتصالك ويمنع إرسال أي طلب حتى انتهاء العداد لتفادي تجديد التهدئة من قِبل بايننس.\n\n"
+                        f"👉 <b>يرجى الانتظار حتى انتهاء الوقت أعلاه</b> ثم اضغط 👁️ أرصدتي مرة واحدة."
+                    )
+                    B.respond_cb(cb, cooldown_text, keyboard(u))
                 else:
                     B.respond_cb(cb,f'⚠️ خطأ جلب الرصيد: {B.esc(raw[:150])}',keyboard(u))
         elif data=='api:orders':
