@@ -33,9 +33,13 @@ class LiveExecutor:
         """حساب إجمالي الرصيد التراكمي — الرصيد الحر + قيمة المراكز المفتوحة"""
         try:
             if cached_bals is not None and isinstance(cached_bals, dict):
-                free_usdt = cached_bals.get('USDT', D(0))
+                raw = cached_bals.get('USDT', D(0))
             else:
-                free_usdt = client.balances().get('USDT', D(0))
+                raw = client.balances().get('USDT', D(0))
+            if isinstance(raw, dict):
+                free_usdt = D(str(raw.get('free', 0)))
+            else:
+                free_usdt = D(str(raw))
         except:
             free_usdt = D(0)
         used = sum(D(p['budget']) for p in self.active(a))
@@ -207,7 +211,8 @@ class LiveExecutor:
             t1=net*D(pp['t1_frac']);t2=(net-t1)*D(pp['t2_frac_of_rest'])
             c.quantity(symbol,t1,plan['tgt1'],True)
             c.quantity(symbol,t2,plan['tgt2'],True)
-            c.quantity(symbol,net-t1-t2,plan['sl'],True)
+            if (net - t1 - t2) > 0:
+                c.quantity(symbol,net-t1-t2,plan['sl'],True)
             stop=c.price_tick(symbol,plan['sl'])
             if stop>=price:raise ValueError('الوقف لم يعد أدنى سعر السوق')
             pid=plan['id'];cid=self.cid(uid,pid,'buy')
