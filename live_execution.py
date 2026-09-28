@@ -7,7 +7,6 @@ import hashlib
 import math
 import time
 import threading
-from decimal import Decimal
 from binance_spot import BinanceSpot,ExchangeError,D,dec
 
 TERMINAL={'FILLED','CANCELED','EXPIRED','EXPIRED_IN_MATCH','REJECTED'}
@@ -158,52 +157,44 @@ class LiveExecutor:
             if not (0<=now-stamp<=180) or stamp<a['activated_at']:return False
             if plan['id'] in a['positions']:return False
             if self.store.unresolved(uid):return False
-            if any(p['symbol']==plan['ticker'] for p in self.active(a)):return False
             c=self.client(a);symbol=plan['ticker'];pp=self.params[plan['pool']]
             price=c.price(symbol);ref=D(plan['signal_price']);target=D(plan['price'])
-            slip=D(a['max_slippage_pct'])/100
+            
+            # السماح بعدة صفقات لنفس العملة مع منع التكرار عند نفس السعر (فارق 1% على الأقل)
+            same_sym_positions = [p for p in self.active(a) if p['symbol'] == symbol]
+            if len(same_sym_positions) >= 3: return False
+            if any(abs(D(p.get('entry_price', price)) / price - 1) < D('0.01') for p in same_sym_positions):
+                return False
+
+            slip=D(a.get('max_slippage_pct', 1.0))/100
             if plan['intent']=='MARKET' and abs(price/ref-1)>slip:return False
             if price<=D(plan['sl']):return False
             base=price if plan['intent']=='MARKET' else target
             
             # v240 CUMULATIVE LOGIC — يستخدم كامل الرصيد تراكمياً
             total_equity, free_usdt, used = self.get_total_equity(a, c)
+            stop_ratio=(base-D(plan['sl']))/base
+            if stop_ratio<=0:return False
             
             if a.get('use_full_balance') or D(a.get('capital',0))==0:
                 # وضع كامل الرصيد التراكمي
-                # total_equity = free + used = كل ما يملكه البوت حالياً
-                # remaining = free (الحر المتاح للشراء)
-                # budget = total_equity * size_pct/100 — تراكمي يكبر مع الأرباح
                 remaining = free_usdt
                 budget = total_equity * D(plan['size_pct'])/100
-                # سقف الصفقة: إذا max_order=0 يعني بدون سقف، وإلا min مع max_order
-                max_order_val = D(a['max_order'])
+                max_order_val = D(a.get('max_order', 0))
                 if max_order_val > 0:
                     budget = min(budget, max_order_val)
-                # لا يمكن أن يتجاوز الرصيد الحر
                 budget = min(budget, remaining * D('0.99'), free_usdt * D('0.99'))
-                # حد الخطر على كامل الرصيد التراكمي
-                stop_ratio=(base-D(plan['sl']))/base
-                if stop_ratio>0:
-                    risk_cap = total_equity * D(a['max_risk_pct'])/100 / stop_ratio
-                    budget = min(budget, risk_cap)
+                risk_cap = total_equity * D(a.get('max_risk_pct', 2.0))/100 / stop_ratio
+                budget = min(budget, risk_cap)
             else:
                 # الوضع القديم — رأس مال ثابت
-                remaining=max(D(0),D(a['capital'])-used)
-                budget=min(D(a['capital'])*D(plan['size_pct'])/100,D(a['max_order']),remaining,
+                remaining=max(D(0),D(a.get('capital', 100))-used)
+                budget=min(D(a.get('capital', 100))*D(plan['size_pct'])/100,D(a.get('max_order', 25)),remaining,
                            free_usdt*D('.99'))
-                stop_ratio=(base-D(plan['sl']))/base
-                if stop_ratio<=0:return False
-                budget=min(budget,D(a['capital'])*D(a['max_risk_pct'])/100/stop_ratio)
-                stop_ratio=(base-D(plan['sl']))/base
-            
-            if 'stop_ratio' not in locals():
-                stop_ratio=(base-D(plan['sl']))/base
-            if stop_ratio<=0:return False
+                budget=min(budget,D(a.get('capital', 100))*D(a.get('max_risk_pct', 2.0))/100/stop_ratio)
             
             # حد أدنى
             if budget < D('10'):
-                # إذا الرصيد المتبقي أقل من 10 USDT، تخطى — سيكمل عند الإضافة
                 return False
             
             qty=c.quantity(symbol,budget*D('.998')/base,base,plan['intent']=='MARKET')
@@ -313,16 +304,28 @@ class LiveExecutor:
             raise
         if r['status'] not in TERMINAL:return
         sold=D(r.get('executedQty',0))
-        if sold>0:
-            net=c.net_filled(p['symbol'],r)
-            deducted=sold+(sold-net)
-        else:deducted=D(0)
-        p['qty']=dec(max(D(0),D(p['qty'])-deducted))
+        p['qty']=dec(max(D(0),D(p['qty'])-sold))
         if r['status']=='FILLED':
             if x['kind']=='T1_TP':p['stage']=max(1,p['stage']);p['stop']=dec(D(p['entry_price'])*D('1.005'))
             if x['kind']=='T2_TP':p['stage']=2
         p['exit']=None
-        p['state']='CLOSED' if D(p['qty'])<=D('0.000000000001') else 'OPEN'
+        
+        # فحص ما إذا كانت الكمية المتبقية غبار لا يمكن تداوله على المنصة
+        is_dust = False
+        try:
+            lot = c.rules(p['symbol'])['filters']['LOT_SIZE']
+            min_q = D(lot.get('minQty', '0.00001'))
+            step_q = D(lot.get('stepSize', '0.00001'))
+            if D(p['qty']) < max(min_q, step_q):
+                is_dust = True
+        except Exception:
+            if D(p['qty']) <= D('0.001'):
+                is_dust = True
+
+        if D(p['qty']) <= D('0.000000000001') or (is_dust and (x['kind'] in ('T2_TP', 'SAFETY', 'KILL') or p['stage'] >= 2)):
+            p['state'] = 'CLOSED'
+        else:
+            p['state'] = 'OPEN'
         self.store.save(a)
         self.store.notify(a['uid'],p['id']+':exit:'+x['kind'],
             f'📤 Binance {p["symbol"]}: {x["kind"]} — الحالة {r["status"]}، كمية البيع الفعلية {sold}.\nمعرّف الأمر: {r["orderId"]}')
@@ -386,18 +389,43 @@ class LiveExecutor:
         with self.lock:
             a=self.store.account(uid)
             if not a.get('credential'):return
-            for p in self.active(a):
-                if p['symbol']!=event['ticker'] or p['pool']!=event['pool']:continue
-                if float(event['timestamp'])<=max(p['source_time'],p.get('filled_at',0)) or p['state']!='OPEN':continue
-                kind=event['kind'];pp=self.params[p['pool']]
-                if kind=='T1_TP' and p['stage']>=1:return
-                if kind=='T2_TP' and (p['stage']>=2 or p['stage']<1):return
-                fraction=pp['t1_frac'] if kind=='T1_TP' else pp['t2_frac_of_rest'] if kind=='T2_TP' else 1.0
-                try:
-                    if event.get('new_sl'):p['stop']=dec(max(D(p['stop']),D(event['new_sl'])))
-                    self._start_exit(a,self.client(a),p,kind,fraction)
-                except Exception as e:self.fault(a,p,e)
-                return
+            candidates = [
+                p for p in self.active(a)
+                if p['symbol'] == event['ticker'] and (
+                    p['pool'] == event.get('pool') or 
+                    {p.get('pool'), event.get('pool')} <= {'GS-V5-ULTRA', 'V5-ULTRA'}
+                ) and p['state'] == 'OPEN' and float(event['timestamp']) > max(p['source_time'], p.get('filled_at', 0))
+            ]
+            if not candidates: return
+            
+            # مطابقة المركز المحدد بالمعرف أولاً أو بأقرب سعر شراء
+            target_p = None
+            if event.get('position_id'):
+                for p in candidates:
+                    if p['id'] == event['position_id']:
+                        target_p = p
+                        break
+            if not target_p and event.get('buy_price'):
+                target_p = min(candidates, key=lambda p: abs(float(p.get('entry_price', 0)) - float(event['buy_price'])))
+            if not target_p:
+                target_p = candidates[0]
+                
+            p = target_p
+            kind=event['kind']
+            pp=self.params.get(p['pool'], self.params.get('GS-V5-ULTRA', {'t1_frac':0.5, 't2_frac_of_rest':1.0}))
+            if kind=='T1_TP' and p['stage']>=1:return
+            if kind=='T2_TP' and p['stage']>=2:return
+            if kind=='T1_TP':
+                fraction = pp['t1_frac']
+            elif kind=='T2_TP':
+                fraction = pp['t2_frac_of_rest'] if p['stage'] >= 1 else 1.0
+            else:
+                fraction = 1.0
+            try:
+                if event.get('new_sl'):p['stop']=dec(max(D(p['stop']),D(event['new_sl'])))
+                self._start_exit(a,self.client(a),p,kind,fraction)
+            except Exception as e:self.fault(a,p,e)
+            return
 
     def update_stops(self,uid,snapshots):
         with self.lock:
@@ -406,7 +434,8 @@ class LiveExecutor:
             for p in self.active(a):
                 if p['state']!='OPEN' or p.get('exit'):continue
                 for s in snapshots:
-                    if s['ticker']==p['symbol'] and s['pool']==p['pool'] and float(s['opened_ts'])>=p['source_time'] and D(s['sl'])>D(p['stop']):
+                    pool_match = (s['pool']==p['pool'] or {s.get('pool'), p.get('pool')} <= {'GS-V5-ULTRA', 'V5-ULTRA'})
+                    if s['ticker']==p['symbol'] and pool_match and float(s['opened_ts'])>=p['source_time'] and D(s['sl'])>D(p['stop']):
                         try:
                             c=self.client(a)
                             if self._cancel_stop(a,c,p):p['stop']=str(s['sl']);self.store.save(a);self._protect(a,c,p)

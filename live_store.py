@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import sqlite3
 import threading
-import time
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 except ImportError:
@@ -54,7 +53,17 @@ class LiveStore:
     def decrypt(self,uid,blob):
         raw=base64.urlsafe_b64decode(blob)
         try:return json.loads(self.cipher().decrypt(raw[:12],raw[12:],f'{uid}:{self.venue}'.encode()))
-        except Exception:raise RuntimeError('تعذر فك مفاتيح Binance؛ تأكد أن APP_SECRET لم يتغير') from None
+        except Exception:
+            try:
+                nonce = raw[:12]
+                ct = raw[12:]
+                assoc = f'{uid}:{self.venue}'.encode()
+                k = hashlib.sha256(hashlib.sha256(self.secret.encode()).digest() + nonce + assoc).digest()
+                plain = bytes(b ^ k[i % len(k)] for i, b in enumerate(ct))
+                return json.loads(plain)
+            except Exception:
+                pass
+            raise RuntimeError('تعذر فك مفاتيح Binance؛ تأكد أن APP_SECRET لم يتغير') from None
 
     def account(self,uid):
         with self.lock:

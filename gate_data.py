@@ -10,8 +10,7 @@ Public Binance ingestion — ULTRA FAST & BULLETPROOF — 1m + 5m
 """
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time, os
-import numpy as np
+import time
 import pandas as pd
 
 COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
@@ -21,7 +20,7 @@ STEP_MS_5M = 300_000
 def parse_klines(rows, now_ms, step_ms):
     if not isinstance(rows, list) or not rows:
         return pd.DataFrame(columns=COLUMNS, index=pd.DatetimeIndex([], tz="UTC"))
-    keep = [r for r in rows if int(r[0]) + step_ms <= now_ms + 300_000]
+    keep = [r for r in rows if isinstance(r, list) and len(r) >= 6 and int(r[0]) + step_ms <= now_ms + 300_000]
     if not keep:
         return pd.DataFrame(columns=COLUMNS, index=pd.DatetimeIndex([], tz="UTC"))
     d = pd.DataFrame(

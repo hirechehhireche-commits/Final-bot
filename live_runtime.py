@@ -3,7 +3,6 @@
 """
 import hashlib
 import html
-import json
 import os
 import secrets
 import threading
@@ -53,11 +52,14 @@ def init(bot):
         except Exception as e:
             if B and hasattr(B, 'log'):
                 B.log(f'[LIVE] Cipher warning: {e}')
-    import fcntl
-    lockfile=open(str(path)+'.lock','a+')
-    try:fcntl.flock(lockfile,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    except OSError:raise RuntimeError('Another bot process owns this execution database') from None
-    STORE.process_lock=lockfile
+    try:
+        import fcntl
+        lockfile=open(str(path)+'.lock','a+')
+        try:fcntl.flock(lockfile,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except OSError:raise RuntimeError('Another bot process owns this execution database') from None
+        STORE.process_lock=lockfile
+    except ImportError:
+        pass
     threading.Thread(target=worker,name='binance-execution',daemon=True).start()
     threading.Thread(target=notifier,name='telegram-outbox',daemon=True).start()
 
@@ -111,8 +113,8 @@ def panel(u):
         f"📂 مراكز نشطة: {len(active)}\n"
         + equity_info +
         (f"⚠️ {B.esc(a['halt'])}\n" if a.get('halt') else '') +
-        f"━━━━━━━━━━━━━━\n"
-        f"💡 <b>ملاحظة:</b> الدخول بإشارات جديدة فقط — وقف سوقي بعد الملء\n"
+        "━━━━━━━━━━━━━━\n"
+        "💡 <b>ملاحظة:</b> الدخول بإشارات جديدة فقط — وقف سوقي بعد الملء\n"
     )
 
 def keyboard(u):
@@ -256,7 +258,6 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                 except Exception as e:
                     u['flow']=None
                     B.save_state()
-                    raw=str(e)
                     err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                     B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
                 return True
@@ -325,7 +326,6 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
             except Exception as e:
                 u['flow']=None
                 B.save_state()
-                raw=str(e)
                 err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                 B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
             return True
@@ -451,7 +451,7 @@ def callback(cb,u):
             EXEC.disconnect(uid);B.respond_cb(cb,'🗑️ حُذف الربط بعد التأكد من عدم وجود مراكز نشطة.',keyboard(u))
         elif data=='api:bal':
             bals=EXEC.client(account(uid)).balances()
-            pos_text = '\n'.join(f'{B.esc(s)}: {q}' for s,q in bals.items() if q>0)
+            pos_text = '\n'.join(f'{B.esc(s)}: {q}' for s,q in sorted(bals.items()) if q>0 and (q >= 0.0001 or s in ('USDT','BTC','ETH','BNB','SOL')))
             text = '💼 <b>الأرصدة الحرة على Binance</b>\n' + (pos_text if pos_text else '• لا توجد أرصدة حرة تفوق الصفر حالياً.')
             try:
                 total_eq, free, used = EXEC.get_total_equity(account(uid), EXEC.client(account(uid)), cached_bals=bals)

@@ -8,12 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 import os, sys, json, time, base64, hashlib, threading, traceback
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import numpy as np, pandas as pd, requests
+import pandas as pd, requests
 
 try:
     import golden_split_engine as GS_ENGINE
     HAS_UNIFIED = True
-except Exception as e:
+except Exception:
     GS_ENGINE = None
     HAS_UNIFIED = False
 
@@ -341,6 +341,18 @@ def respond_cb(cb: dict, text: str, kb=None):
         except Exception:
             pass
 
+def fmt_p(val) -> str:
+    """تنسيق ذكي للأسعار يحمي العملات الصغيرة (مثل SHIB أو PEPE أو DENT) من التقريب للصفر"""
+    try:
+        p = float(val)
+        if p >= 100.0: return f"{p:.2f}"
+        elif p >= 1.0: return f"{p:.3f}"
+        elif p >= 0.01: return f"{p:.4f}"
+        elif p >= 0.0001: return f"{p:.6f}"
+        else: return f"{p:.8f}".rstrip('0').rstrip('.')
+    except Exception:
+        return str(val)
+
 def fmt_entry(p: dict, w2: float = 0.82, holds: dict = None) -> str:
     try:
         ticker = p.get("ticker","")
@@ -351,7 +363,7 @@ def fmt_entry(p: dict, w2: float = 0.82, holds: dict = None) -> str:
         frame = p.get("frame","?")
         pool = p.get("pool","")
         txt = f"📡 إشارة {ticker} | {frame} | {pool}\n"
-        txt += f"دخول {price:.4f} | وقف {sl:.4f} | هدف1 {tgt1:.4f} هدف2 {tgt2:.4f}"
+        txt += f"دخول {fmt_p(price)} | وقف {fmt_p(sl)} | هدف1 {fmt_p(tgt1)} هدف2 {fmt_p(tgt2)}"
         return txt
     except Exception:
         return f"إشارة {p.get('ticker','')}"
@@ -397,7 +409,7 @@ def api_back_kb() -> list:
 # تهيئة تلقائية فورية لنظام التداول
 try:
     LIVE.init(sys.modules[__name__])
-except Exception as _e:
+except Exception:
     pass
 
 WELCOME_TEXT = (
@@ -485,7 +497,7 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
             if (now - last_dt).total_seconds() > 2.0 * 3600:
                 continue
         except Exception:
-            pass
+            continue
             
         checked += 1
         try:
@@ -726,7 +738,7 @@ def clear_all_old_positions():
         global BUY_FINGERPRINTS, SELL_FINGERPRINTS
         BUY_FINGERPRINTS = {}
         SELL_FINGERPRINTS = {}
-        log(f"[CLEAR] تم تصفير الصفقات القديمة والحافظة الورقية — بداية نظيفة جديدة")
+        log("[CLEAR] تم تصفير الصفقات القديمة والحافظة الورقية — بداية نظيفة جديدة")
         return old_count
     except Exception as e:
         log(f"[CLEAR] {e}")
@@ -1180,23 +1192,23 @@ def send_sell_alerts_immediately(sell_plans: list):
             if sell_type == "SL":
                 txt += f"❌ <b>تم ضرب وقف الخسارة في عملة {ticker}</b>  \n"
                 txt += f"📤  (<code>{profit_pct:+.2f}%</code>)  \n"
-                txt += f"#{pos_num} شراء <code>{buy_p:.4f}</code> → بيع <code>{curr_p:.4f}</code>\n"
+                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             elif sell_type == "T1":
                 txt += f"✅ <b>تم ضرب الهدف الأول في عملة {ticker}</b>\n"
                 txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة (<code>{profit_pct:+.2f}%</code>)\n"
-                txt += f"🛡️ تم نقل الوقف لنقطة التعادل Breakeven (+0.30%)\n"
-                txt += f"#{pos_num} شراء <code>{buy_p:.4f}</code> → بيع <code>{curr_p:.4f}</code>\n"
+                txt += "🛡️ تم نقل الوقف لنقطة التعادل Breakeven (+0.30%)\n"
+                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             elif sell_type == "T2":
                 txt += f"✅ <b>تم ضرب الهدف الثاني في عملة {ticker}</b>\n"
                 txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة (<code>{profit_pct:+.2f}%</code>)\n"
-                txt += f"#{pos_num} شراء <code>{buy_p:.4f}</code> → بيع <code>{curr_p:.4f}</code>\n"
+                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             elif sell_type == "TIME":
                 txt += f"⏱️ <b>انتهاء مدة الاحتفاظ (5 ساعات) في عملة {ticker}</b>\n"
                 txt += f"📤 خروج كامل (<code>{profit_pct:+.2f}%</code>)\n"
-                txt += f"#{pos_num} شراء <code>{buy_p:.4f}</code> → بيع <code>{curr_p:.4f}</code>\n"
+                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 
         if not txt:
@@ -1293,7 +1305,9 @@ def refresh_open_positions_live_and_guard(send_alerts: bool = True) -> list:
                         "pool": sell.get("pool", "GS-V5-ULTRA"),
                         "kind": ev_kind,
                         "timestamp": time.time(),
-                        "new_sl": sell.get("sl")
+                        "new_sl": sell.get("sl"),
+                        "position_id": sell.get("position_id"),
+                        "buy_price": sell.get("buy_price")
                     }
                     for acc in LIVE.STORE.accounts():
                         if acc.get("enabled") and acc.get("credential"):
@@ -1312,7 +1326,7 @@ def refresh_open_positions_live_and_guard(send_alerts: bool = True) -> list:
         return []
 
 def run_cycle(reason: str = "scheduled"):
-    global LATEST_EVENTS, ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS, LATEST_SELL_PLANS, LATEST_OPEN_POSITIONS, LAST_CYCLE_COMPLETED_AT
+    global ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS, LATEST_SELL_PLANS, LATEST_OPEN_POSITIONS, LAST_CYCLE_COMPLETED_AT
     if not CYCLE_LOCK.acquire(blocking=False):
         log(f"[CYCLE:{reason}] دورة أخرى قيد التنفيذ")
         return ENGINE_RES
@@ -1490,22 +1504,22 @@ def latest_signals_text(u: dict) -> str:
             if sell_type == "SL":
                 txt += f"❌ تم ضرب وقف الخسارة في عملة {ticker}  \n"
                 txt += f"📤  ({profit_pct:+.2f}%)  \n"
-                txt += f"#{pos_num} شراء {buy_p:.3f} → بيع {curr_p:.3f}\n"
-                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += f"#{pos_num} شراء {fmt_p(buy_p)} → بيع {fmt_p(curr_p)}\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             elif sell_type == "T1":
                 txt += f"✅ تم ضرب الهدف الأول في عملة {ticker}\n"
                 txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة ({profit_pct:+.2f}%)\n"
-                txt += f"#{pos_num} شراء {buy_p:.3f} → بيع {curr_p:.3f}\n"
-                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += f"#{pos_num} شراء {fmt_p(buy_p)} → بيع {fmt_p(curr_p)}\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             elif sell_type == "T2":
                 txt += f"✅✅ تم ضرب الهدف الثاني في عملة {ticker}\n"
                 txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة ({profit_pct:+.2f}%)\n"
-                txt += f"#{pos_num} شراء {buy_p:.3f} → بيع {curr_p:.3f}\n"
-                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += f"#{pos_num} شراء {fmt_p(buy_p)} → بيع {fmt_p(curr_p)}\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             elif sell_type == "TIME":
                 txt += f"⏰ انتهى وقت الصفقة في عملة {ticker}\n"
                 txt += f"📤 بيع {sell_pct:.0f}% ({profit_pct:+.2f}%)\n"
-                txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     
     # === إشارات الشراء — بالشكل الجديد المطلوب ===
     if LATEST_PLANS:
@@ -1518,7 +1532,6 @@ def latest_signals_text(u: dict) -> str:
             tgt1 = float(p.get("tgt1",0))
             tgt2 = float(p.get("tgt2",0))
             size_pct = float(p.get("size_pct",1.5))
-            frame = p.get("frame","1m")
             
             # حساب النسب
             chase_price = signal_price * 1.005
@@ -1532,39 +1545,21 @@ def latest_signals_text(u: dict) -> str:
             existing = [x for x in LATEST_OPEN_POSITIONS if x.get("ticker")==ticker_full and x.get("status")=="OPEN"]
             next_num = len(existing) + 1
             
-            txt += f"🎯 صفقة  في عملة {ticker} #{next_num}\n"
-            txt += f"\n"
-            txt += f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            txt += f"\n"
-            txt += f"💰 سعر الدخول:\n"
-            txt += f"\n"
-            txt += f"{signal_price:.3f}\n"
-            txt += f"\n"
-            txt += f"🚫 حد المطاردة: لا تشترِ فوق {chase_price:.3f} (+{chase_pct:.2f}%) — إن تجاوز السعر الحد، ألغِ الصفقة\n"
-            txt += f"\n"
-            txt += f"📦 حجم الشراء: {size_pct:.1f}% من رأس المال\n"
-            txt += f"\n"
-            txt += f"\n"
-            txt += f"\n"
-            txt += f"⏳ المدة المتوقعة لتحقيق الأهداف: 1-2 ساعات\n"
-            txt += f"\n"
-            txt += f"🎯 الأهداف:\n"
-            txt += f"\n"
-            txt += f"✅ الهدف 1️⃣: (+{tgt1_pct:.2f}%)\n"
-            txt += f"\n"
-            txt += f"{tgt1:.3f}\n"
-            txt += f"\n"
-            txt += f"✅ الهدف 2️⃣: (+{tgt2_pct:.2f}%)\n"
-            txt += f"\n"
-            txt += f"{tgt2:.3f}\n"
-            txt += f"\n"
-            txt += f"🔴 وقف الخسارة: ({sl_pct:.2f}%)\n"
-            txt += f"\n"
-            txt += f"{sl:.3f}\n"
-            txt += f"\n"
-            txt += f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            txt += f"\n"
-            txt += f"\n"
+            txt += f"🎯 صفقة  في عملة {ticker} #{next_num}\n\n"
+            txt += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            txt += "💰 سعر الدخول:\n\n"
+            txt += f"{fmt_p(signal_price)}\n\n"
+            txt += f"🚫 حد المطاردة: لا تشترِ فوق {fmt_p(chase_price)} (+{chase_pct:.2f}%) — إن تجاوز السعر الحد، ألغِ الصفقة\n\n"
+            txt += f"📦 حجم الشراء: {size_pct:.1f}% من رأس المال\n\n\n\n"
+            txt += "⏳ المدة المتوقعة لتحقيق الأهداف: 1-2 ساعات\n\n"
+            txt += "🎯 الأهداف:\n\n"
+            txt += f"✅ الهدف 1️⃣: (+{tgt1_pct:.2f}%)\n\n"
+            txt += f"{fmt_p(tgt1)}\n\n"
+            txt += f"✅ الهدف 2️⃣: (+{tgt2_pct:.2f}%)\n\n"
+            txt += f"{fmt_p(tgt2)}\n\n"
+            txt += f"🔴 وقف الخسارة: ({sl_pct:.2f}%)\n\n"
+            txt += f"{fmt_p(sl)}\n\n"
+            txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n\n"
     
     if not LATEST_PLANS and not LATEST_SELL_PLANS:
         txt += "💤 لا إشارات جديدة الآن — السوق هادئ\n"
@@ -1649,11 +1644,11 @@ def portfolio_text(u: dict, prices: dict = None) -> str:
                     pnl_icon = "🟢" if pnl_pct >= 0 else "🔴"
                     
                     txt += f"┌ 📌 <b>صفقة #{num}</b> ({rem_pct}% متبقي | {pos.get('frame','5m')})\n"
-                    txt += f"├ 📥 الشراء: {buy_p:.4f} USDT | التكلفة: {cost:.1f} USDT\n"
-                    txt += f"├ 🏷️ الحالي: {curr_p:.4f} USDT\n"
+                    txt += f"├ 📥 الشراء: {fmt_p(buy_p)} USDT | التكلفة: {cost:.1f} USDT\n"
+                    txt += f"├ 🏷️ الحالي: {fmt_p(curr_p)} USDT\n"
                     txt += f"├ {pnl_icon} <b>الربح الحالي: {pnl_pct:+.2f}% ({pnl_usd:+.2f} USDT)</b>\n"
-                    txt += f"├ 🎯 هدف 1: {tgt1:.4f} | 🎯 هدف 2: {tgt2:.4f}\n"
-                    txt += f"├ 🔴 الوقف: {sl:.4f}\n"
+                    txt += f"├ 🎯 هدف 1: {fmt_p(tgt1)} | 🎯 هدف 2: {fmt_p(tgt2)}\n"
+                    txt += f"├ 🔴 الوقف: {fmt_p(sl)}\n"
                     txt += f"└ ⏱️ {time_str} UTC\n\n"
                     
         if closed_deals:
@@ -1837,7 +1832,7 @@ def fmt_engine_status(res: dict) -> str:
         if status["age_1m"] is not None:
             txt += f"• 🕐 عمر البيانات: 1m {status['age_1m']:.0f}د | 5m {status['age_5m']:.0f}د\n"
         if status["has_cache_1m"] and status["has_cache_5m"]:
-            txt += f"• 💾 كاش: ✅ جاهز\n"
+            txt += "• 💾 كاش: ✅ جاهز\n"
         txt += "━━━━━━━━━━━━━━━━━━━━\n"
         if status["is_collecting"]:
             txt += "🔄 <b>جاري التحديث الآن...</b>\n"
@@ -2046,13 +2041,13 @@ def get_live_page_content() -> tuple:
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
     
     # تفاصيل فريم 5 دقائق (الرئيسي)
-    txt += f"📦 <b>فريم 5 دقائق (فريم الاستراتيجية الرئيسي):</b>\n"
+    txt += "📦 <b>فريم 5 دقائق (فريم الاستراتيجية الرئيسي):</b>\n"
     txt += f"• العملات النشطة: <code>{status['symbols_5m']}/{status['total_assets']}</code> عملة\n"
     txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_5m'] else '⏳ جاري الحفظ'}\n"
     txt += "\n"
     
     # تفاصيل فريم 1 دقيقة
-    txt += f"📦 <b>فريم 1 دقيقة:</b>\n"
+    txt += "📦 <b>فريم 1 دقيقة:</b>\n"
     txt += f"• العملات: <code>{status['symbols_1m']}/{status['total_assets']}</code> عملة\n"
     txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_1m'] else '⏳ جاري الحفظ'}\n"
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
@@ -2129,15 +2124,15 @@ def get_guard_content(u: dict, chat_id: int) -> tuple:
                 pnl_icon = "🟢" if pnl_pct >= 0 else "🔴"
                 
                 txt += f"┌ 📌 <b>صفقة #{num}</b> ({rem_pct}% متبقي | {pos.get('frame','5m')})\n"
-                txt += f"├ 📥 الشراء: {buy_p:.4f} USDT | التكلفة: {cost:.1f} USDT\n"
-                txt += f"├ 🏷️ الحالي: {curr_p:.4f} USDT\n"
+                txt += f"├ 📥 الشراء: {fmt_p(buy_p)} USDT | التكلفة: {cost:.1f} USDT\n"
+                txt += f"├ 🏷️ الحالي: {fmt_p(curr_p)} USDT\n"
                 txt += f"├ {pnl_icon} <b>الربح الحالي: {pnl_pct:+.2f}% ({pnl_usd:+.2f} USDT)</b>\n"
-                txt += f"├ 🎯 هدف 1: {tgt1:.4f} | 🎯 هدف 2: {tgt2:.4f}\n"
-                txt += f"├ 🔴 الوقف: {sl:.4f}\n"
+                txt += f"├ 🎯 هدف 1: {fmt_p(tgt1)} | 🎯 هدف 2: {fmt_p(tgt2)}\n"
+                txt += f"├ 🔴 الوقف: {fmt_p(sl)}\n"
                 if time_str:
                     txt += f"└ ⏱️ {time_str} UTC\n\n"
                 else:
-                    txt += f"└ ⏱️ V5 Ultra 5m\n\n"
+                    txt += "└ ⏱️ V5 Ultra 5m\n\n"
     
     if not has_any:
         st_data = load_state()
@@ -2167,13 +2162,13 @@ def get_guard_content(u: dict, chat_id: int) -> tuple:
 
 def get_port_content(u: dict) -> tuple:
     txt = portfolio_text(u)
-    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>الأرقام مربوطة بالمحفظة وتتحدث تلقائياً</b>"
+    txt += "\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>الأرقام مربوطة بالمحفظة وتتحدث تلقائياً</b>"
     kb = back_kb()
     return txt, kb
 
 def get_sig_content(u: dict) -> tuple:
     txt = latest_signals_text(u)
-    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>رادار الإشارات يعمل لحظياً وتلقائياً</b>"
+    txt += "\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>رادار الإشارات يعمل لحظياً وتلقائياً</b>"
     kb = back_kb()
     return txt, kb
 
@@ -2483,7 +2478,7 @@ def handle_callback(cb: dict):
                         allowed.append(target_str)
                         st["allowed"] = allowed
                     
-                    target_u = get_user(int(target), create=True)
+                    get_user(int(target), create=True)
                     save_state()
                     log(f"[ALLOW] المشرف {chat_id} سمح للمستخدم {target}")
                     
@@ -2522,11 +2517,11 @@ def handle_callback(cb: dict):
                     send_msg(chat_id, f"⚠️ خطأ: {esc(str(e))}", full_menu_kb(u), msg_id=msg_id)
         else:
             log(f"[CB] غير معروف: {data}")
-            send_msg(chat_id, f"🤖 <b>لوحة التحكم</b>\n━━━━━━━━━━━━━━\nاضغط للمتابعة", full_menu_kb(u), msg_id=msg_id)
+            send_msg(chat_id, "🤖 <b>لوحة التحكم</b>\n━━━━━━━━━━━━━━\nاضغط للمتابعة", full_menu_kb(u), msg_id=msg_id)
     except Exception as e:
         log(f"[CB MAIN] {e} {traceback.format_exc()}")
         try:
-            send_msg(chat_id, f"⚠️ خطأ بسيط — حاول مرة أخرى", full_menu_kb(u), msg_id=msg_id)
+            send_msg(chat_id, "⚠️ خطأ بسيط — حاول مرة أخرى", full_menu_kb(u), msg_id=msg_id)
         except:
             pass
 

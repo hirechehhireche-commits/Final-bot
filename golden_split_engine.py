@@ -187,5 +187,5 @@ def evaluate_golden_setup(df5: pd.DataFrame, df1h: pd.DataFrame, btc_bullish: bo
 if __name__ == "__main__":
     print("Golden Split Engine V5 ULTRA - 3 params")
     print(f"Config: EMA {GOLDEN_CONFIG['EMA_FAST']}/{GOLDEN_CONFIG['EMA_MID']}/{GOLDEN_CONFIG['EMA_SLOW']} RSI {GOLDEN_CONFIG['MIN_RSI_14']}-{GOLDEN_CONFIG['MAX_RSI_14']} BO {GOLDEN_CONFIG['BREAKOUT_LOOKBACK']}")
-    print(f"Expected: 7.91/day for 77 coins → matches 8.05/day original")
+    print("Expected: 7.91/day for 77 coins → matches 8.05/day original")
     print("✓ V5 ULTRA OK")

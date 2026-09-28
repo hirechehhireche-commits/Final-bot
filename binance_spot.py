@@ -266,19 +266,30 @@ class BinanceSpot:
         qty = D(order['executedQty'])
         if qty <= 0: return D(0)
         base = self.rules(symbol)['info']['baseAsset']
-        quote = self.rules(symbol)['info']['quoteAsset']
-        trades = []; start = None
-        while True:
-            p = {'symbol': symbol, 'orderId': order['orderId'], 'limit': 1000}
-            if start is not None: p['fromId'] = start
-            batch = self.request('GET', '/api/v3/myTrades', p)
-            trades.extend(x for x in batch if x['orderId'] == order['orderId'])
-            if len(batch) < 1000: break
-            start = batch[-1]['id'] + 1
-        if sum((D(x['qty']) for x in trades), D(0)) < qty:
-            raise ExchangeError('FILLS_NOT_YET_VISIBLE', True)
-        fees_base = sum((D(x['commission']) for x in trades if x['commissionAsset'] == base), D(0))
-        return max(D(0), qty - fees_base)
+        
+        # 1. إذا كان رد الأمر يحتوي على تفاصيل التنفيذ (من newOrderRespType=FULL)
+        if 'fills' in order and isinstance(order['fills'], list) and len(order['fills']):
+            fees_base = sum((D(x['commission']) for x in order['fills'] if x.get('commissionAsset') == base), D(0))
+            return max(D(0), qty - fees_base)
+
+        # 2. الاستعلام من myTrades مع معالجة مرنة للشبكة
+        try:
+            trades = []; start = None
+            while True:
+                p = {'symbol': symbol, 'orderId': order['orderId'], 'limit': 1000}
+                if start is not None: p['fromId'] = start
+                batch = self.request('GET', '/api/v3/myTrades', p)
+                trades.extend(x for x in batch if x['orderId'] == order['orderId'])
+                if len(batch) < 1000: break
+                start = batch[-1]['id'] + 1
+            if sum((D(x['qty']) for x in trades), D(0)) >= qty:
+                fees_base = sum((D(x['commission']) for x in trades if x['commissionAsset'] == base), D(0))
+                return max(D(0), qty - fees_base)
+        except Exception:
+            pass
+            
+        # 3. Fallback آمن: خصم العمولة القياسية لتفادي تعليق الحساب
+        return max(D(0), qty * D('0.9985'))
 
     def calculate_fee(self, quantity, price, fee_rate=0.00075, bnb_discount=True):
         notional = D(quantity) * D(price)
