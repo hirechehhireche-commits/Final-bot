@@ -86,7 +86,7 @@ def log(msg: str):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts} UTC] {msg}", flush=True)
 
-def _binance_get(path: str, params: dict = None, timeout: int = 25, hosts: list = None):
+def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list = None):
     hosts = hosts or BINANCE_HOSTS
     ordered = sorted(hosts, key=lambda h: _host_health.get(h, 0))
     last_err = None
@@ -96,12 +96,17 @@ def _binance_get(path: str, params: dict = None, timeout: int = 25, hosts: list 
             if r.status_code == 200:
                 _host_health[h] = 0
                 return r.json()
+            # إذا كان الرمز ملغياً أو غير موجود في بايننس، لا داعي لتكرار المحاولة على باقي المرايا
+            if r.status_code == 400 and ("-1121" in r.text or "Invalid symbol" in r.text):
+                raise ValueError(f"رمز ملغي: {params.get('symbol') if params else ''}")
             last_err = f"HTTP {r.status_code}: {r.text[:120]}"
             _host_health[h] = _host_health.get(h, 0) + 1
+        except ValueError:
+            raise
         except Exception as e:
             last_err = str(e)
             _host_health[h] = _host_health.get(h, 0) + 1
-        time.sleep(0.6)
+        time.sleep(0.2)
     raise RuntimeError(f"فشل الجلب من كل المرايا ({path}): {last_err}")
 
 STATE_LOCK = threading.RLock()
@@ -1773,67 +1778,51 @@ def handle_callback(cb: dict):
             send_msg(chat_id, txt, kb, msg_id=msg_id)
         elif data.startswith("bt:live:page:"):
             try:
+                # إذا المحرك لم يبدأ بعد وليس قيد الفحص، شغله فوراً في الخلفية
+                if ENGINE_RES is None and not CYCLE_LOCK.locked():
+                    threading.Thread(target=run_cycle, args=("manual_live",), daemon=True).start()
+                    time.sleep(0.8)
+                    
                 status = get_data_collection_status()
                 txt = "⚡ <b>حالة جمع البيانات — مباشر</b>\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━\n"
-                # حالة الجمع
                 if status["is_collecting"]:
-                    txt += "🔄 <b>الحالة: جاري الجمع الآن</b>\n"
+                    txt += "🔄 <b>الحالة: جاري فحص وتحديث البيانات لحظياً...</b>\n"
                 else:
-                    txt += "✅ <b>الحالة: مكتمل — البوت يعمل</b>\n"
+                    txt += "✅ <b>الحالة: مكتمل — البوت يعمل ويحرس السوق</b>\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━\n"
-                # تفاصيل 1m
-                txt += f"📦 <b>فريم 1 دقيقة:</b>\n"
-                txt += f"• العملات: {status['symbols_1m']}/{status['total_assets']}\n"
-                txt += f"• الكاش: {'✅ موجود' if status['has_cache_1m'] else '❌ غير موجود'}\n"
-                if status["age_1m"] is not None:
-                    txt += f"• العمر: {status['age_1m']:.0f} دقيقة\n"
-                if status["elapsed_1m"]:
-                    txt += f"• زمن الجمع: {status['elapsed_1m']}ث\n"
-                if status["updated_1m"]:
-                    txt += f"• آخر تحديث: {status['updated_1m'][:19]}\n"
-                txt += "\n"
-                # تفاصيل 5m
-                txt += f"📦 <b>فريم 5 دقائق:</b>\n"
-                txt += f"• العملات: {status['symbols_5m']}/{status['total_assets']}\n"
-                txt += f"• الكاش: {'✅ موجود' if status['has_cache_5m'] else '❌ غير موجود'}\n"
+                
+                # تفاصيل فريم 5 دقائق (الرئيسي)
+                txt += f"📦 <b>فريم 5 دقائق (فريم الاستراتيجية الرئيسي):</b>\n"
+                txt += f"• العملات النشطة: {status['symbols_5m']}/{status['total_assets']} عملة\n"
+                txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_5m'] else '⏳ جاري الحفظ'}\n"
                 if status["age_5m"] is not None:
-                    txt += f"• العمر: {status['age_5m']:.0f} دقيقة\n"
-                if status["elapsed_5m"]:
-                    txt += f"• زمن الجمع: {status['elapsed_5m']}ث\n"
-                if status["updated_5m"]:
-                    txt += f"• آخر تحديث: {status['updated_5m'][:19]}\n"
+                    txt += f"• عمر البيانات: {status['age_5m']:.0f} دقيقة\n"
+                txt += "\n"
+                
+                # تفاصيل فريم 1 دقيقة
+                txt += f"📦 <b>فريم 1 دقيقة:</b>\n"
+                txt += f"• العملات: {status['symbols_1m']}/{status['total_assets']} عملة\n"
+                txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_1m'] else '⏳ جاري الحفظ'}\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━\n"
+                
                 # حالة المحرك
                 if ENGINE_RES:
-                    gate = ENGINE_RES.get('gate',{})
-                    frames = gate.get('frames',{})
-                    txt += f"🤖 <b>المحرك:</b>\n"
-                    txt += f"• 1m: {frames.get('1m',0)} | 5m: {frames.get('5m',0)}\n"
-                    txt += f"• فحص: {gate.get('checked',0)} | إشارات: {len(LATEST_PLANS)}\n"
-                    txt += f"• زمن الدورة: {status['last_cycle_secs']:.1f}ث\n"
+                    gate = ENGINE_RES.get('gate', {})
+                    txt += "🤖 <b>المحرك الذكي:</b>\n"
+                    txt += "• الاستراتيجية: V5 Ultra (3 معاملات)\n"
+                    txt += f"• فحص العملات: {gate.get('checked', status['symbols_5m'])} عملة\n"
+                    txt += f"• صفقات مفتوحة حالياً: {len(LATEST_OPEN_POSITIONS)}\n"
+                    txt += f"• زمن الفحص: {status['last_cycle_secs']:.1f} ثانية\n"
                     if status["last_cycle"]:
-                        txt += f"• آخر دورة: {status['last_cycle'][:19]}\n"
+                        txt += f"• توقيت آخر فحص: {status['last_cycle'][:19].replace('T', ' ')} UTC\n"
                 else:
-                    txt += "🤖 المحرك: ⏳ لم يبدأ بعد\n"
-                    txt += "💡 سيبدأ بعد اكتمال الجمع (5-15ث)\n"
+                    txt += "🤖 <b>المحرك:</b> ⏳ قيد الفحص الأولي (ثوانٍ قليلة)\n"
+                    txt += "💡 اضغط 🔄 تحديث مباشر للعرض الفوري\n"
+                    
                 txt += "━━━━━━━━━━━━━━━━━━━━\n"
-                # تفسير الحالات
-                if not status["engine_ready"]:
-                    txt += "⏳ <b>ماذا يحدث الآن؟</b>\n"
-                    if not status["has_cache_1m"] and not status["has_cache_5m"]:
-                        txt += "• أول إقلاع — يجمع 4 أيام (دقة كاملة)\n"
-                        txt += "• ⏱️ 5-15 ثانية ثم يجهز\n"
-                    elif status["is_collecting"]:
-                        txt += "• يجمع الشموع الجديدة (1-5 شموع)\n"
-                        txt += "• ⏱️ ثواني قليلة\n"
-                    else:
-                        txt += "• يجهز المحرك للتحليل\n"
-                else:
-                    txt += "✅ <b>مكتمل — البوت يفحص كل دقيقة</b>\n"
-                    txt += "• كاش حديث → 0.03ث\n"
-                    txt += "• خلفية: تحميل 7 أيام + 20 يوم\n"
-                send_msg(chat_id, txt, back_kb([[bt("🔄 تحديث مباشر","bt:live:page:0"), bt("📊 حالة المحرك","m:port")]]), msg_id=msg_id)
+                txt += "🔄 التحديث دوري وتلقائي على مدار الساعة"
+                send_msg(chat_id, txt, back_kb([[bt("🔄 تحديث مباشر", "bt:live:page:0"), bt("📊 المحفظة", "m:port")]]), msg_id=msg_id)
             except Exception as e:
                 log(f"[LIVE PAGE] {e} {traceback.format_exc()}")
                 send_msg(chat_id, f"⚡ خطأ: {esc(str(e))}", api_back_kb(), msg_id=msg_id)

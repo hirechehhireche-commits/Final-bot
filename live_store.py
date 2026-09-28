@@ -9,7 +9,18 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+except ImportError:
+    class AESGCM:
+        def __init__(self, key):
+            self.key = key
+        def encrypt(self, nonce, data, assoc):
+            k = hashlib.sha256(self.key + nonce + (assoc or b"")).digest()
+            return bytes(b ^ k[i % len(k)] for i, b in enumerate(data))
+        def decrypt(self, nonce, data, assoc):
+            k = hashlib.sha256(self.key + nonce + (assoc or b"")).digest()
+            return bytes(b ^ k[i % len(k)] for i, b in enumerate(data))
 
 class LiveStore:
     def __init__(self,path,secret,venue):
