@@ -153,8 +153,8 @@ class BinanceSpot:
             return result
         except ExchangeError:
             raise
-        except requests.RequestException as re:
-            raise ExchangeError('NETWORK', True, msg=str(re)) from None
+        except requests.RequestException as req_err:
+            raise ExchangeError('NETWORK', True, msg=str(req_err)) from None
 
     def verify(self):
         # فحص درع الصمت أولاً
