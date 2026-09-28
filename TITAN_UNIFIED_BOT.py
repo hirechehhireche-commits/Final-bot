@@ -1075,6 +1075,7 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                     pos["remaining_pct"] = 50
                     pos["remaining_qty"] = float(pos.get("qty", 0)) * 0.5
                     pos["status"] = "OPEN"
+                    pos["sl"] = round(buy_p * 1.003, 4)  # نقل الوقف إلى نقطة التعادل Breakeven (+0.30%) لحماية المتبقي
                     
                     paper["cash"] = round(float(paper.get("cash", 0)) + (sold_qty * curr_price), 2)
                     paper["realized_pnl"] = round(float(paper.get("realized_pnl", 0)) + profit_usd, 2)
