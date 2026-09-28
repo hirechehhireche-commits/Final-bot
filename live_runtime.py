@@ -120,14 +120,12 @@ def keyboard(u):
     # تصميم عصري منظم — مجموعات واضحة
     if not a.get('credential'):
         # غير مربوط — أزرار ربط
-        rows.append([bt('🔐 ربط آمن (صفحة)', 'api:add')])
-        rows.append([bt('⚡ ربط سريع في البوت', 'api:easy_full')])
-        rows.append([bt('🛠️ ربط مخصص', 'api:easy')])
+        rows.append([bt('ربط binance', 'api:easy_full')])
     else:
         # مربوط — حالة + إدارة
         rows.append([bt('👁️ أرصدتي', 'api:bal'), bt('📂 مراكزي', 'api:orders')])
         rows.append([bt('⚡ تفعيل التداول', 'api:real'), bt('📝 إيقاف الشراء', 'api:paper')])
-        rows.append([bt('🔄 تحديث المفتاح', 'api:easy_full'), bt('🔐 صفحة آمنة', 'api:add')])
+        rows.append([bt('ربط binance', 'api:easy_full')])
         rows.append([bt('🛑 إغلاق طارئ', 'api:kill'), bt('🗑️ حذف المفتاح', 'api:del')])
         if not a.get('use_full_balance'):
             rows.append([bt('💎 تفعيل كامل الرصيد', 'api:full')])
@@ -191,7 +189,7 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
     if time.time()-flow.get('started',0)>EASY_TIMEOUT:
         u['flow']=None
         B.save_state()
-        B.send_msg(uid,'⏰ انتهت مهلة إدخال المفتاح (5د). ابدأ من جديد.', B.back_kb([[B.bt('⚡ إضافة سهلة','api:easy_full')]]))
+        B.send_msg(uid,'⏰ انتهت مهلة إدخال المفتاح (5د). ابدأ من جديد.', B.back_kb([[B.bt('ربط binance','api:easy_full')]]))
         return True
 
     step=flow.get('step')

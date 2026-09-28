@@ -361,18 +361,17 @@ def bt(text: str, data: str) -> dict:
 def more_kb() -> list:
     """الزر الرئيسي المصغر — تصميم عصري"""
     return [
-        [bt("🎛️ فتح لوحة التحكم", "nav:more")],
-        [bt("📡 الإشارات الحية", "m:sig")]
+        [bt("🎛️ فتح لوحة التحكم", "nav:more")]
     ]
 
 def full_menu_kb(u: dict = None) -> list:
     """لوحة تحكم عصرية منظمة — 4 أقسام واضحة"""
     # قسم التداول
     rows = [
-        [bt("🚀 التداول", "m:api"), bt("📡 الإشارات الحية", "m:sig")],
+        [bt("🚀 ربط binance", "m:api")],
         [bt("🛡️ مراكزي المفتوحة", "m:guard"), bt("⚡ مباشر", "bt:live:page:0")],
         # قسم الأداء
-        [bt("📊 المحفظة", "m:port"), bt("📈 النتائج", "bt:page:0")],
+        [bt("💼 المحفظة الورقية", "m:port"), bt("📈 الباكتاست", "bt:page:0")],
         [bt("📅 تقرير أسبوعي", "m:rep")],
         # قسم الإعدادات
         [bt("⚙️ الإعدادات", "m:set"), bt("ℹ️ حول البوت", "m:abt")],
@@ -385,7 +384,7 @@ def full_menu_kb(u: dict = None) -> list:
 def back_kb(extra_rows: list = None) -> list:
     """زر رجوع عصري"""
     rows = list(extra_rows or [])
-    rows.append([bt("🏠 الرئيسية", "nav:more"), bt("🔄 تحديث", "m:sig")])
+    rows.append([bt("🏠 الرئيسية", "nav:more")])
     return rows
 
 def api_back_kb() -> list:
@@ -1684,7 +1683,7 @@ def backtest_page_text(res: dict, page: int = 0) -> tuple:
     txt = backtest_summary(res)
     kb = [
         [bt("⚡ تفاصيل 1m","bt:page:1"), bt("📊 تفاصيل 5m","bt:page:2")],
-        [bt("🔄 تحديث","bt:page:0"), bt("🏠 الرئيسية","nav:more")]
+        [bt("🏠 الرئيسية","nav:more")]
     ]
     if page==1:
         txt = (
@@ -1878,7 +1877,7 @@ def get_live_page_content() -> tuple:
         
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
     txt += "🟢 <b>أرقام النظام محدثة لحظياً وتلقائياً</b>"
-    kb = back_kb([[bt("🔄 تحديث يدوي", "bt:live:page:0"), bt("📊 المحفظة", "m:port")]])
+    kb = back_kb([[bt("💼 المحفظة الورقية", "m:port")]])
     return txt, kb
 
 def get_guard_content(u: dict, chat_id: int) -> tuple:
@@ -1928,7 +1927,7 @@ def get_guard_content(u: dict, chat_id: int) -> tuple:
         
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
     txt += "🟢 <b>أرقام الصفقات تومض وتتحدث تلقائياً مع حركة الأسعار</b>"
-    kb = back_kb([[bt("🔄 تحديث يدوي", "m:guard"), bt("📊 المحفظة", "m:port")]])
+    kb = back_kb([[bt("💼 المحفظة الورقية", "m:port")]])
     return txt, kb
 
 def get_port_content(u: dict) -> tuple:
@@ -1940,7 +1939,7 @@ def get_port_content(u: dict) -> tuple:
 def get_sig_content(u: dict) -> tuple:
     txt = latest_signals_text(u)
     txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>رادار الإشارات يعمل لحظياً وتلقائياً</b>"
-    kb = back_kb([[bt("🔄 تحديث يدوي", "m:sig")]])
+    kb = back_kb()
     return txt, kb
 
 def _quick_update_open_positions_prices():
@@ -2090,6 +2089,14 @@ def handle_callback(cb: dict):
     try:
         unregister_live_viewer(chat_id)
         if data == "nav:more":
+            # تحديث شامل وفوري لكل شيء عند الضغط على فتح لوحة التحكم
+            try:
+                cleanup_stale_and_delisted_positions()
+                _quick_update_open_positions_prices()
+                if not CYCLE_LOCK.locked():
+                    threading.Thread(target=run_cycle, args=("panel_open",), daemon=True).start()
+            except Exception as _e:
+                log(f"[PANEL REFRESH] {_e}")
             send_msg(chat_id, "🎛️ <b>لوحة التحكم الرئيسية</b>\n━━━━━━━━━━━━━━\nاختر القسم:", full_menu_kb(u), msg_id=msg_id)
         elif data in ("nav:less","nav:main"):
             send_msg(chat_id, "🤖 <b>بوت التداول الذكي</b>\n━━━━━━━━━━━━━━\nاضغط لفتح اللوحة", more_kb(), msg_id=msg_id)
