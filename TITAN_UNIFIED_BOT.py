@@ -87,7 +87,7 @@ POOL_PARAMS_MAP = {
 }
 POOL_WEIGHT_OF_TOTAL = {"P1": 0.35, "P2": 0.15, "P3": 0.12, "S2": 0.20, "GS": 0.38}
 
-BINANCE_HOSTS = ["https://data-api.binance.vision","https://api1.binance.com","https://api2.binance.com","https://api.binance.com"]
+BINANCE_HOSTS = ["https://data-api.binance.vision"]
 _host_health = {h: 0 for h in BINANCE_HOSTS}
 LAST_CYCLE_COMPLETED_AT = 0
 
@@ -625,9 +625,10 @@ LAST_CYCLE_SECS = 0.0
 
 def next_candle_run_ts(now: datetime = None) -> datetime:
     now = now or datetime.now(timezone.utc)
-    boundary = now.replace(second=0, microsecond=0)
+    minute = (now.minute // 5) * 5
+    boundary = now.replace(minute=minute, second=0, microsecond=0)
     if boundary <= now:
-        boundary += timedelta(minutes=1)
+        boundary += timedelta(minutes=5)
     return boundary + timedelta(seconds=CYCLE_DELAY_SEC)
 
 def next_5m_run_ts(now: datetime = None) -> datetime:

@@ -1,6 +1,6 @@
 """Small allowlisted Binance Spot REST client. Never logs URLs/keys/signatures.
 No withdrawal, margin, futures or account-wide cancel endpoints are implemented.
-v217 AURORA — Fixed bugs + FeeAware v5 support + Multi-Cluster Resilience
+v217 AURORA — Bulletproof Multi-Cluster + Dedicated Vision Time Sync
 """
 import hashlib
 import hmac
@@ -20,15 +20,22 @@ def floor_step(value, step):
     return (value / step).to_integral_value(rounding=ROUND_DOWN) * step
 
 class ExchangeError(Exception):
-    def __init__(self, code, uncertain=False):
-        self.code, self.uncertain = code, uncertain
-        super().__init__(f'Binance code={code}; ' + ('نتيجة غير مؤكدة — يلزم الاستعلام' if uncertain else 'رُفض الطلب'))
+    def __init__(self, code, uncertain=False, msg=""):
+        self.code, self.uncertain, self.msg = code, uncertain, msg
+        err_text = f"Binance code={code}"
+        if msg:
+            err_text += f" ({msg})"
+        err_text += "; " + ('نتيجة غير مؤكدة — يلزم الاستعلام' if uncertain else 'رُفض الطلب')
+        super().__init__(err_text)
 
+# ترتيب المرايا الرسمية لبايننس — المرايا السريعة أولاً لتفادي أي ضغط على السيرفر الرئيسي
 BINANCE_LIVE_HOSTS = [
-    'https://api.binance.com',
     'https://api1.binance.com',
     'https://api2.binance.com',
-    'https://api3.binance.com'
+    'https://api3.binance.com',
+    'https://api4.binance.com',
+    'https://api-gcp.binance.com',
+    'https://api.binance.com'
 ]
 
 class BinanceSpot:
@@ -40,6 +47,33 @@ class BinanceSpot:
         self.session = session or requests.Session()
         self.offset=0; self.clock_at=0; self.filters={}; self.block_until=0
 
+    def sync_time(self):
+        """مزامنة دقيقة لوقت السيرفر عبر Vision API مجاناً بدون استهلاك أي حدود للتداول"""
+        if time.time() - self.clock_at <= 1800 and self.clock_at > 0:
+            return
+        # 1. جرب خادم Vision المخصص للبيانات العامة أولاً (لا يستهلك أي Rate Limit)
+        try:
+            r = requests.get('https://data-api.binance.vision/api/v3/time', timeout=4)
+            if r.status_code == 200:
+                server_time = int(r.json()['serverTime'])
+                self.offset = server_time - int(time.time() * 1000)
+                self.clock_at = time.time()
+                return
+        except Exception:
+            pass
+
+        # 2. جرب عبر المرايا البديلة
+        for h in self.hosts:
+            try:
+                r = self.session.get(f"{h}/api/v3/time", timeout=4)
+                if r.status_code == 200:
+                    server_time = int(r.json()['serverTime'])
+                    self.offset = server_time - int(time.time() * 1000)
+                    self.clock_at = time.time()
+                    return
+            except Exception:
+                continue
+
     def request(self, method, path, params=None, signed=True):
         allowed = {('GET','/api/v3/time'),('GET','/api/v3/exchangeInfo'),('GET','/api/v3/ticker/price'),
                    ('GET','/api/v3/account'),('GET','/sapi/v1/account/apiRestrictions'),
@@ -50,35 +84,32 @@ class BinanceSpot:
         p=dict(params or {})
         if signed:
             if not self.key or not self.secret: raise ValueError('Missing credentials')
-            if time.time()-self.clock_at > 1800:
-                remote=self.request('GET','/api/v3/time',signed=False)
-                self.offset=int(remote['serverTime'])-int(time.time()*1000); self.clock_at=time.time()
-            p.update(timestamp=int(time.time()*1000)+self.offset, recvWindow=5000)
-        # FIX v217: use dict for params to avoid double encoding bug
+            self.sync_time()
+            p.update(timestamp=int(time.time()*1000)+self.offset, recvWindow=10000)
+            
         query_string = urlencode(p)
         if signed:
             query_string += '&signature=' + hmac.new(self.secret.encode(),query_string.encode(),hashlib.sha256).hexdigest()
         headers={'X-MBX-APIKEY':self.key} if signed else {}
         try:
             if method == 'GET':
-                # FIX v217: pass query string directly without extra encoding
                 url = self.base + path + ('?' + query_string if query_string else '')
                 resp=self.session.request(method, url, headers=headers, timeout=(5,15))
             else:
                 headers['Content-Type']='application/x-www-form-urlencoded'
                 resp=self.session.request(method,self.base+path,data=query_string,headers=headers,timeout=(5,15))
             if resp.status_code in (418,429):
-                self.block_until=time.time()+max(60,int(resp.headers.get('Retry-After','60')))
+                self.block_until=time.time()+max(30,int(resp.headers.get('Retry-After','30')))
             try: result=resp.json()
             except ValueError: raise ExchangeError('BAD_RESPONSE',True) from None
             if resp.status_code != 200 or (isinstance(result,dict) and result.get('code',0)<0):
                 code=result.get('code',resp.status_code) if isinstance(result,dict) else resp.status_code
-                # -1003 = كثرة الطلبات — عالجه كـ rate limit مؤقت مع رسالة واضحة
+                msg=result.get('msg','') if isinstance(result,dict) else str(resp.text[:100])
                 if code == -1003 or resp.status_code in (418,429):
-                    retry_after = int(resp.headers.get('Retry-After','60')) if resp.status_code in (418,429) else 60
-                    self.block_until=time.time()+max(60, retry_after)
-                    raise ExchangeError(f'{code} (كثرة الطلبات - Binance مشغول - انتظر دقيقة)', resp.status_code>=500 or code in (-1000,-1006,-1007,-1003))
-                raise ExchangeError(code, resp.status_code>=500 or code in (-1000,-1006,-1007))
+                    retry_after = int(resp.headers.get('Retry-After','30')) if resp.status_code in (418,429) else 30
+                    self.block_until=time.time()+max(30, retry_after)
+                    raise ExchangeError(f'{code} (Binance مشغول - كثرة الطلبات)', resp.status_code>=500 or code in (-1000,-1006,-1007,-1003), msg=msg)
+                raise ExchangeError(code, resp.status_code>=500 or code in (-1000,-1006,-1007), msg=msg)
             return result
         except requests.RequestException:
             raise ExchangeError('NETWORK',True) from None
@@ -86,11 +117,11 @@ class BinanceSpot:
     def verify(self):
         last_exc = None
         a = None
-        # تجربة الاتصال عبر المرايا الرسمية لـ Binance (api, api1, api2, api3)
-        # لتجاوز أي حظر أو ضغط مؤقت على سيرفر معين (-1003) بنجاح فوري
+        # تجربة الاتصال عبر المرايا الرسمية لـ Binance بالتتابع (api1, api2, api3, api4, api-gcp, api)
+        # لتجاوز أي حظر أو ضغط مؤقت فورياً
         for host in self.hosts:
             self.base = host
-            self.block_until = 0  # فك الحظر المؤقت لتجربة السيرفر البديل
+            self.block_until = 0  # إلغاء مؤقت الحظر عند تجربة مرآة جديدة لضمان المحاولة
             for attempt in range(2):
                 try:
                     a = self.request('GET', '/api/v3/account')
@@ -99,13 +130,13 @@ class BinanceSpot:
                 except Exception as e:
                     last_exc = e
                     raw = str(e)
-                    # إذا كان الخطأ في المفتاح نفسه (مفتاح خطأ، توقيع، غير مصرح)، نرمي الخطأ فوراً
+                    # إذا كان الخطأ في المفتاح نفسه (مفتاح خطأ، توقيع خطأ، غير مصرح)، نرمي الخطأ فوراً
                     if any(err_code in raw for err_code in ['-2014', '-2015', '-1022', '-2010', 'Missing credentials']):
                         raise
-                    # إذا كان ضغطاً أو كثرة طلبات، انتقل فوراً للسيرفر البديل
-                    if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw or '429' in raw:
+                    # إذا كان ضغطاً أو كثرة طلبات على هذا السيرفر، انتقل فوراً للسيرفر البديل
+                    if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw or '429' in raw or '418' in raw:
                         break
-                    time.sleep(0.5)
+                    time.sleep(0.3)
             if a and isinstance(a, dict) and a.get('canTrade') is not None:
                 break
         else:
@@ -196,7 +227,6 @@ class BinanceSpot:
         if qty<=0:return D(0)
         base=self.rules(symbol)['info']['baseAsset']
         quote=self.rules(symbol)['info']['quoteAsset']
-        # FIX v217: handle BNB and quote fees properly
         trades=[]; start=None
         while True:
             p={'symbol':symbol,'orderId':order['orderId'],'limit':1000}
@@ -207,16 +237,11 @@ class BinanceSpot:
             start=batch[-1]['id']+1
         if sum((D(x['qty']) for x in trades),D(0)) < qty:
             raise ExchangeError('FILLS_NOT_YET_VISIBLE',True)
-        # Only base asset commission reduces qty; BNB or quote fees are separate P&L
         fees_base=sum((D(x['commission']) for x in trades if x['commissionAsset']==base),D(0))
-        fees_bnb=sum((D(x['commission']) for x in trades if x['commissionAsset']=='BNB'),D(0))
-        # For P&L calculation, track all fees
         return max(D(0),qty-fees_base)
 
     def calculate_fee(self, quantity, price, fee_rate=0.00075, bnb_discount=True):
-        """v217: حساب رسوم Binance بدقة — مع خصم BNB"""
         notional = D(quantity) * D(price)
-        # مع BNB: 0.075% per side, بدون BNB: 0.10% per side
         rate = D(fee_rate) if bnb_discount else D(0.001)
         fee = notional * rate
         return fee

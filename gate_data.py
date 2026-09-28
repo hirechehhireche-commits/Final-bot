@@ -179,18 +179,20 @@ def load_dual_stores(symbols, cache_dir, state, days, api_get, log, workers=10):
             return {}
 
     def _load_1m():
-        try:
-            return _load_store(symbols, cache_dir, state, 1, api_get, log, 12, "1m", STEP_MS_1M, "gate1m_v102.pkl", 100, 1, ultra_fast=True)
-        except Exception as e:
-            log(f"[DUAL] 1m error: {e}")
-            p = Path(cache_dir) / "gate1m_v102.pkl"
-            if p.exists():
+        # تحميل فريم 1m من الكاش المحلي فقط لتوفير اتصالات الشبكة وحماية السيرفر 100%
+        candidate_paths = [
+            Path(cache_dir) / "gate1m_v102.pkl",
+            Path.cwd() / "gate1m_v102.pkl",
+            Path(__file__).resolve().parent / "gate1m_v102.pkl"
+        ]
+        for cp in candidate_paths:
+            if cp.exists():
                 try:
-                    obj = pd.read_pickle(p)
-                    return obj.get("data", {})
-                except:
+                    obj = pd.read_pickle(cp)
+                    return obj.get("data", obj) if isinstance(obj, dict) else obj
+                except Exception:
                     pass
-            return {}
+        return {}
 
     with ThreadPoolExecutor(max_workers=2) as ex:
         f5 = ex.submit(_load_5m)

@@ -258,7 +258,7 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                     B.save_state()
                     raw=str(e)
                     if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                        err='⏳ Binance مشغول حالياً (كثرة الطلبات -1003)\n\n• السبب: السيرفر يرسل كثير طلبات بيانات السوق + طلب التحقق في نفس اللحظة\n• الحل: انتظر دقيقة واحدة ثم أعد المحاولة\n• تأكد أيضاً:\n  - المفتاح Spot فقط بلا سحب\n  - IP الخادم مضاف في قائمة IP المسموحة (إن كنت مفعل IP Restriction)\n  - أو عطّل IP Restriction مؤقتاً للتجربة\n\nسيتم حل المشكلة تلقائياً بعد دقيقة.'
+                        err=f'⏳ Binance مشغول حالياً (كثرة الطلبات -1003)\n\n• السبب: المنصة تفرض ضغطاً مؤقتاً على السيرفر\n• تفاصيل الخطأ: {B.esc(raw[:150])}\n• تأكد أيضاً:\n  - المفتاح Spot فقط بلا سحب\n  - IP الخادم مضاف في whitelist (إن كنت مفعل IP Restriction)\n  - أو عطّل IP Restriction مؤقتاً للتجربة'
                     else:
                         err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                     B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
@@ -330,7 +330,7 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                 B.save_state()
                 raw=str(e)
                 if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                    err='⏳ Binance مشغول (كثرة الطلبات -1003) — انتظر دقيقة وأعد المحاولة.\n• أضف IP الخادم في whitelist أو عطّل IP Restriction مؤقتاً.'
+                    err=f'⏳ Binance مشغول (كثرة الطلبات -1003) — تفاصيل: {B.esc(raw[:150])}\n• أضف IP الخادم في whitelist أو عطّل IP Restriction مؤقتاً.'
                 else:
                     err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                 B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
