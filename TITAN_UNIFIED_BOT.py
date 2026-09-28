@@ -56,10 +56,6 @@ BACKTEST_PAGE_ROWS = 14
 
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
-GOLDEN_ASSETS = GS_ENGINE.GOLDEN_APPROVED_COINS if HAS_UNIFIED else []
-TITAN_ASSETS = ['SOL','FET','DOT','XRP','BNB','ETH','XLM','HBAR','TRX','LINK','ADA','LTC','DOGE','ARB','BCH','ETC','EOS','ZEC','BTC','AVAX']
-ALL_DATA_ASSETS = list(set([a+"USDT" if not a.endswith("USDT") else a for a in GOLDEN_ASSETS + TITAN_ASSETS] + ["BTCUSDT"]))
-
 # قائمة العملات المتوقفة أو الملغاة من Binance Spot (تمنع تماماً من توليد أي صفقات حية)
 DELISTED_OR_INACTIVE = {
     "PLAUSDT", "WTCUSDT", "GTOUSDT", "DNTUSDT", "GXSUSDT", "TCTUSDT", 
@@ -67,6 +63,15 @@ DELISTED_OR_INACTIVE = {
     "DARUSDT", "STPTUSDT", "ELFUSDT", "EOSUSDT", "LRCUSDT", "COSUSDT", 
     "DENTUSDT", "STORJUSDT", "ARDRUSDT", "PLA", "WTC", "GTO", "DNT", "GXS", "TCT", "REEF"
 }
+
+GOLDEN_ASSETS = GS_ENGINE.GOLDEN_APPROVED_COINS if HAS_UNIFIED else []
+TITAN_ASSETS = ['SOL','FET','DOT','XRP','BNB','ETH','XLM','HBAR','TRX','LINK','ADA','LTC','DOGE','ARB','BCH','ETC','EOS','ZEC','BTC','AVAX']
+# استبعاد العملات الملغية تماماً لتوفير الكوتا وتسريع المحرك
+ALL_DATA_ASSETS = sorted(list(set([
+    a+"USDT" if not a.endswith("USDT") else a 
+    for a in GOLDEN_ASSETS + TITAN_ASSETS
+    if a not in DELISTED_OR_INACTIVE and (a+"USDT") not in DELISTED_OR_INACTIVE
+] + ["BTCUSDT"])))
 
 SIGNAL_BOT_VERSION = "بوت التداول الذكي"
 BOT_VERSION = "النسخة العصرية"
@@ -101,7 +106,13 @@ def log(msg: str):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts} UTC] {msg}", flush=True)
 
+_BINANCE_MARKET_BACKOFF_UNTIL = 0
+
 def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list = None):
+    global _BINANCE_MARKET_BACKOFF_UNTIL
+    # إذا كانت فترة التهدئة نشطة، نعتمد على الكاش ولا نرسل طلبات جديدة لبايننس
+    if time.time() < _BINANCE_MARKET_BACKOFF_UNTIL:
+        raise RuntimeError("Binance Market Rate Limit Backoff")
     hosts = hosts or BINANCE_HOSTS
     ordered = sorted(hosts, key=lambda h: _host_health.get(h, 0))
     last_err = None
@@ -117,25 +128,18 @@ def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list 
             if r.status_code == 400 and ("-1121" in r.text or "Invalid symbol" in r.text):
                 raise ValueError(f"رمز ملغي: {params.get('symbol') if params else ''}")
             if r.status_code in (418, 429) or "-1003" in r.text:
+                # تفعيل التهدئة 60 ثانية فوراً والتوقف عن مراسلة بايننس لتفريغ الكوتا
+                _BINANCE_MARKET_BACKOFF_UNTIL = time.time() + 60
                 _host_health[h] = _host_health.get(h, 0) + 15
-                last_err = f"HTTP {r.status_code} (Rate Limit -1003)"
-                continue
+                raise RuntimeError("Binance Rate Limit (429/-1003) — تفعيل فترة التهدئة 60 ثانية")
             last_err = f"HTTP {r.status_code}: {r.text[:120]}"
             _host_health[h] = _host_health.get(h, 0) + 1
-        except ValueError:
+        except (ValueError, RuntimeError):
             raise
         except Exception as e:
             last_err = str(e)
             _host_health[h] = _host_health.get(h, 0) + 1
         time.sleep(0.05)
-    if last_err and "Rate Limit" in str(last_err):
-        time.sleep(0.5)
-        try:
-            r = BINANCE_SESSION.get(hosts[0] + path, params=params or {}, timeout=timeout)
-            if r.status_code == 200:
-                return r.json()
-        except:
-            pass
     raise RuntimeError(f"فشل الجلب من كل المرايا ({path}): {last_err}")
 
 STATE_LOCK = threading.RLock()
