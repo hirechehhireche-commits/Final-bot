@@ -1109,6 +1109,7 @@ def run_cycle(reason: str = "scheduled"):
         save_state()
         
         log(f"[CYCLE:{reason}] اكتملت في {LAST_CYCLE_SECS:.1f}ث — شراء جديد: {len(LATEST_PLANS)} | بيع: {len(LATEST_SELL_PLANS)} | صفقات مفتوحة: {len(LATEST_OPEN_POSITIONS)}")
+        trigger_immediate_live_refresh()
         
         # 7. إرسال التنبيهات إلى تيليجرام فقط إذا وُجدت إشارات حقيقية جديدة (شراء أو بيع)
         # لا إشارات وهمية ولا إرسال عند هدوء السوق!
@@ -1654,6 +1655,7 @@ def handle_text_message(msg: dict):
     except Exception as e:
         log(f"[EASY_TEXT] {e}")
 
+    unregister_live_viewer(chat_id)
     low = text.lower()
     if low == "/id":
         send_msg(chat_id, f"🆔 معرفك: <code>{chat_id}</code>", api_back_kb())
@@ -1724,6 +1726,237 @@ def handle_text_message(msg: dict):
     else:
         send_msg(chat_id, "👋 أهلاً\nاضغط 🎛️ لفتح لوحة التحكم", more_kb())
 
+
+# ============ نظام التحديث اللحظي الحي التلقائي (بدون ضغط أزرار) ============
+LIVE_VIEWERS = {}
+LIVE_VIEWERS_LOCK = threading.Lock()
+
+def register_live_viewer(chat_id, msg_id, screen_type, kb=None, last_text=""):
+    if not chat_id or not msg_id:
+        return
+    with LIVE_VIEWERS_LOCK:
+        LIVE_VIEWERS[chat_id] = {
+            "msg_id": msg_id,
+            "screen": screen_type,
+            "opened_at": time.time(),
+            "last_refresh": time.time(),
+            "last_text": last_text,
+            "kb": kb
+        }
+
+def unregister_live_viewer(chat_id):
+    with LIVE_VIEWERS_LOCK:
+        LIVE_VIEWERS.pop(chat_id, None)
+
+def get_live_page_content() -> tuple:
+    status = get_data_collection_status()
+    txt = "⚡ <b>حالة جمع البيانات — مباشر</b>\n"
+    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    if status["is_collecting"]:
+        txt += "🔄 <b>الحالة: جاري فحص وتحديث البيانات لحظياً...</b>\n"
+    else:
+        txt += "✅ <b>الحالة: مكتمل — البوت يعمل ويحرس السوق</b>\n"
+    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # تفاصيل فريم 5 دقائق (الرئيسي)
+    txt += f"📦 <b>فريم 5 دقائق (فريم الاستراتيجية الرئيسي):</b>\n"
+    txt += f"• العملات النشطة: {status['symbols_5m']}/{status['total_assets']} عملة\n"
+    txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_5m'] else '⏳ جاري الحفظ'}\n"
+    if status["age_5m"] is not None:
+        txt += f"• عمر البيانات: {status['age_5m']:.0f} دقيقة\n"
+    txt += "\n"
+    
+    # تفاصيل فريم 1 دقيقة
+    txt += f"📦 <b>فريم 1 دقيقة:</b>\n"
+    txt += f"• العملات: {status['symbols_1m']}/{status['total_assets']} عملة\n"
+    txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_1m'] else '⏳ جاري الحفظ'}\n"
+    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # حالة المحرك
+    open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get('status') == 'OPEN']) if 'LATEST_OPEN_POSITIONS' in globals() else 0
+    if ENGINE_RES:
+        gate = ENGINE_RES.get('gate', {})
+        txt += "🤖 <b>المحرك الذكي:</b>\n"
+        txt += "• الاستراتيجية: V5 Ultra (3 معاملات)\n"
+        txt += f"• فحص العملات: {gate.get('checked', status['symbols_5m'])} عملة\n"
+        txt += f"• صفقات مفتوحة حالياً: {open_count}\n"
+        txt += f"• زمن الفحص: {status['last_cycle_secs']:.1f} ثانية\n"
+        if status["last_cycle"]:
+            txt += f"• توقيت آخر فحص: {status['last_cycle'][:19].replace('T', ' ')} UTC\n"
+    else:
+        txt += "🤖 <b>المحرك:</b> ⏳ قيد الفحص الأولي (ثوانٍ قليلة)\n"
+        
+    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    txt += f"🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    kb = back_kb([[bt("🔄 تحديث يدوي", "bt:live:page:0"), bt("📊 المحفظة", "m:port")]])
+    return txt, kb
+
+def get_guard_content(u: dict, chat_id: int) -> tuple:
+    acc = LIVE.account(chat_id) if LIVE and hasattr(LIVE, "account") else {}
+    active = LIVE.EXEC.active(acc) if LIVE and LIVE.EXEC else []
+    paper_positions = [p for p in get_open_positions() if p.get("status") == "OPEN"]
+    
+    txt = "🛡️ <b>مراكزي وصفقاتي المفتوحة</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+    
+    has_any = False
+    if active:
+        has_any = True
+        txt += f"🌐 <b>صفقات Binance الحقيقية ({len(active)}):</b>\n"
+        for p in active[:10]:
+            txt += f"┌ {p.get('symbol')} | {p.get('state')}\n├ كمية: {p.get('qty')} | وقف: {p.get('stop')}\n└ ميزانية: {p.get('budget','?')}\n\n"
+            
+    if paper_positions:
+        has_any = True
+        txt += f"🤖 <b>صفقات الاستراتيجية النشطة ({len(paper_positions)}):</b>\n"
+        for p in paper_positions[:10]:
+            sym = p.get('ticker', '').replace('USDT', '')
+            pos_id = p.get('pos_id', '#1')
+            entry = float(p.get('entry_price', 0))
+            curr = float(p.get('current_price', entry))
+            pnl = ((curr - entry) / entry * 100) if entry > 0 else 0
+            t1 = float(p.get('t1', 0))
+            t2 = float(p.get('t2', 0))
+            sl = float(p.get('sl', 0))
+            sign = "🟢" if pnl >= 0 else "🔴"
+            txt += f"{sign} <b>{sym} {pos_id}</b>: دخول <code>{entry:.4f}</code> | سعر الآن <code>{curr:.4f}</code> ({pnl:+.2f}%)\n"
+            txt += f"  🎯 T1: <code>{t1:.4f}</code> | T2: <code>{t2:.4f}</code> | 🛑 SL: <code>{sl:.4f}</code>\n\n"
+    
+    if not has_any:
+        cap = float(acc.get('capital', 0)) if acc else 0
+        txt += "💤 <b>لا توجد صفقات مفتوحة حالياً</b>\n\n"
+        if cap > 0:
+            txt += f"💰 الرصيد الحر على المنصة: {cap:.2f} USDT\n"
+        txt += "🔔 سيقوم البوت بفتح الصفقات ومتابعتها تلقائياً عند ظهور أول إشارة مطابقة.\n"
+        
+    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    txt += "━━━━━━━━━━━━━━━━━━━━\n"
+    txt += f"🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    kb = back_kb([[bt("🔄 تحديث يدوي", "m:guard"), bt("📊 المحفظة", "m:port")]])
+    return txt, kb
+
+def get_port_content(u: dict) -> tuple:
+    txt = portfolio_text(u)
+    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    kb = back_kb()
+    return txt, kb
+
+def get_sig_content(u: dict) -> tuple:
+    txt = latest_signals_text(u)
+    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    kb = back_kb([[bt("🔄 تحديث يدوي", "m:sig")]])
+    return txt, kb
+
+def _quick_update_open_positions_prices():
+    try:
+        open_pos = [p for p in get_open_positions() if p.get("status") == "OPEN"]
+        if not open_pos:
+            return
+        symbols = list(set([p.get("ticker") for p in open_pos if p.get("ticker")]))
+        if not symbols:
+            return
+        prices = {}
+        for s in symbols:
+            try:
+                res = _binance_get("/api/v3/ticker/price", {"symbol": s}, timeout=2)
+                if isinstance(res, dict) and "price" in res:
+                    prices[s] = float(res["price"])
+            except Exception:
+                pass
+        if prices:
+            changed = False
+            for p in open_pos:
+                sym = p.get("ticker")
+                if sym in prices and abs(prices[sym] - float(p.get("current_price", 0))) > 1e-8:
+                    p["current_price"] = prices[sym]
+                    changed = True
+            if changed:
+                save_state()
+    except Exception:
+        pass
+
+def live_auto_refresher_loop():
+    """حلقة التحديث اللحظي التلقائي — تعدل الرسائل المفتوحة دورياً بدون ضغط أزرار"""
+    while True:
+        time.sleep(2.5)
+        try:
+            if not LIVE_VIEWERS:
+                continue
+            
+            _quick_update_open_positions_prices()
+            
+            now_t = time.time()
+            with LIVE_VIEWERS_LOCK:
+                active_items = list(LIVE_VIEWERS.items())
+                
+            for cid, viewer in active_items:
+                # إيقاف التحديث إذا مضت 10 دقائق دون نشاط لتوفير البيانات
+                if now_t - viewer.get("opened_at", now_t) > 600:
+                    unregister_live_viewer(cid)
+                    continue
+                    
+                screen = viewer.get("screen")
+                msg_id = viewer.get("msg_id")
+                u = get_user(cid)
+                
+                new_txt, new_kb = None, None
+                if screen == "live":
+                    new_txt, new_kb = get_live_page_content()
+                elif screen == "guard":
+                    new_txt, new_kb = get_guard_content(u, cid)
+                elif screen == "port":
+                    new_txt, new_kb = get_port_content(u)
+                elif screen == "sig":
+                    new_txt, new_kb = get_sig_content(u)
+                    
+                if not new_txt or not msg_id:
+                    continue
+                    
+                # إذا تغير المحتوى أو مضت 5 ثوانٍ، نرسل تعديل الرسالة
+                if new_txt != viewer.get("last_text"):
+                    kb_markup = {"inline_keyboard": new_kb} if new_kb else None
+                    res = tg("editMessageText", chat_id=cid, message_id=msg_id, text=new_txt,
+                             reply_markup=kb_markup, parse_mode="HTML", timeout=3.5)
+                    if res is None:
+                        # إذا فشل التعديل (مثلاً حذف المستخدم الرسالة)، نلغي تسجيله
+                        pass
+                    viewer["last_text"] = new_txt
+                    viewer["last_refresh"] = now_t
+        except Exception:
+            pass
+
+def trigger_immediate_live_refresh():
+    """تحديث فوري لكل الشاشات النشطة بمجرد انتهاء دورة الفحص"""
+    try:
+        if not LIVE_VIEWERS:
+            return
+        now_t = time.time()
+        with LIVE_VIEWERS_LOCK:
+            active_items = list(LIVE_VIEWERS.items())
+        for cid, viewer in active_items:
+            screen = viewer.get("screen")
+            msg_id = viewer.get("msg_id")
+            u = get_user(cid)
+            new_txt, new_kb = None, None
+            if screen == "live":
+                new_txt, new_kb = get_live_page_content()
+            elif screen == "guard":
+                new_txt, new_kb = get_guard_content(u, cid)
+            elif screen == "port":
+                new_txt, new_kb = get_port_content(u)
+            elif screen == "sig":
+                new_txt, new_kb = get_sig_content(u)
+            if new_txt and msg_id:
+                kb_markup = {"inline_keyboard": new_kb} if new_kb else None
+                tg("editMessageText", chat_id=cid, message_id=msg_id, text=new_txt,
+                   reply_markup=kb_markup, parse_mode="HTML", timeout=3.0)
+                viewer["last_text"] = new_txt
+                viewer["last_refresh"] = now_t
+    except Exception:
+        pass
+
 def handle_callback(cb: dict):
     # إلغاء دوران زر التيليجرام فورياً في أول 1 ميلي ثانية
     cb_id = cb.get("id")
@@ -1752,6 +1985,7 @@ def handle_callback(cb: dict):
         pass
 
     try:
+        unregister_live_viewer(chat_id)
         if data == "nav:more":
             send_msg(chat_id, "🎛️ <b>لوحة التحكم الرئيسية</b>\n━━━━━━━━━━━━━━\nاختر القسم:", full_menu_kb(u), msg_id=msg_id)
         elif data in ("nav:less","nav:main"):
@@ -1759,50 +1993,23 @@ def handle_callback(cb: dict):
         elif data == "m:abt":
             send_msg(chat_id, ABOUT_TEXT, api_back_kb(), msg_id=msg_id)
         elif data == "m:sig":
-            send_msg(chat_id, latest_signals_text(u), back_kb([[bt("🔄 تحديث الإشارات","m:sig")]]), msg_id=msg_id)
+            txt, kb = get_sig_content(u)
+            res = send_msg(chat_id, txt, kb, msg_id=msg_id)
+            mid = msg_id or (res.get("message_id") if isinstance(res, dict) else None)
+            register_live_viewer(chat_id, mid, "sig", kb=kb, last_text=txt)
         elif data == "m:guard":
             try:
-                acc = LIVE.account(chat_id) if LIVE and hasattr(LIVE, "account") else {}
-                active = LIVE.EXEC.active(acc) if LIVE and LIVE.EXEC else []
-                paper_positions = [p for p in get_open_positions() if p.get("status") == "OPEN"]
-                
-                txt = "🛡️ <b>مراكزي وصفقاتي المفتوحة</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-                
-                has_any = False
-                if active:
-                    has_any = True
-                    txt += f"🌐 <b>صفقات Binance الحقيقية ({len(active)}):</b>\n"
-                    for p in active[:10]:
-                        txt += f"┌ {p.get('symbol')} | {p.get('state')}\n├ كمية: {p.get('qty')} | وقف: {p.get('stop')}\n└ ميزانية: {p.get('budget','?')}\n\n"
-                        
-                if paper_positions:
-                    has_any = True
-                    txt += f"🤖 <b>صفقات الاستراتيجية النشطة ({len(paper_positions)}):</b>\n"
-                    for p in paper_positions[:10]:
-                        sym = p.get('ticker', '').replace('USDT', '')
-                        pos_id = p.get('pos_id', '#1')
-                        entry = float(p.get('entry_price', 0))
-                        curr = float(p.get('current_price', entry))
-                        pnl = ((curr - entry) / entry * 100) if entry > 0 else 0
-                        t1 = float(p.get('t1', 0))
-                        t2 = float(p.get('t2', 0))
-                        sl = float(p.get('sl', 0))
-                        sign = "🟢" if pnl >= 0 else "🔴"
-                        txt += f"{sign} <b>{sym} {pos_id}</b>: دخول <code>{entry:.4f}</code> | سعر الآن <code>{curr:.4f}</code> ({pnl:+.2f}%)\n"
-                        txt += f"  🎯 T1: <code>{t1:.4f}</code> | T2: <code>{t2:.4f}</code> | 🛑 SL: <code>{sl:.4f}</code>\n\n"
-                
-                if not has_any:
-                    cap = float(acc.get('capital', 0)) if acc else 0
-                    txt += "💤 <b>لا توجد صفقات مفتوحة حالياً</b>\n\n"
-                    if cap > 0:
-                        txt += f"💰 الرصيد الحر على المنصة: {cap:.2f} USDT\n"
-                    txt += "🔔 سيقوم البوت بفتح الصفقات ومتابعتها تلقائياً عند ظهور أول إشارة مطابقة."
-                
-                send_msg(chat_id, txt, back_kb([[bt("🔄 تحديث المراكز", "m:guard"), bt("📊 المحفظة", "m:port")]]), msg_id=msg_id)
+                txt, kb = get_guard_content(u, chat_id)
+                res = send_msg(chat_id, txt, kb, msg_id=msg_id)
+                mid = msg_id or (res.get("message_id") if isinstance(res, dict) else None)
+                register_live_viewer(chat_id, mid, "guard", kb=kb, last_text=txt)
             except Exception as e:
                 send_msg(chat_id, f"🛡️ خطأ: {esc(str(e))}", api_back_kb(), msg_id=msg_id)
         elif data == "m:port":
-            send_msg(chat_id, portfolio_text(u), back_kb(), msg_id=msg_id)
+            txt, kb = get_port_content(u)
+            res = send_msg(chat_id, txt, kb, msg_id=msg_id)
+            mid = msg_id or (res.get("message_id") if isinstance(res, dict) else None)
+            register_live_viewer(chat_id, mid, "port", kb=kb, last_text=txt)
         elif data == "m:rep":
             send_msg(chat_id, weekly_report_text(u), back_kb(), msg_id=msg_id)
         elif data == "m:set":
@@ -1859,50 +2066,12 @@ def handle_callback(cb: dict):
             send_msg(chat_id, txt, kb, msg_id=msg_id)
         elif data.startswith("bt:live:page:"):
             try:
-                # إذا المحرك لم يبدأ بعد وليس قيد الفحص، شغله فوراً في الخلفية
                 if ENGINE_RES is None and not CYCLE_LOCK.locked():
                     threading.Thread(target=run_cycle, args=("manual_live",), daemon=True).start()
-                    
-                status = get_data_collection_status()
-                txt = "⚡ <b>حالة جمع البيانات — مباشر</b>\n"
-                txt += "━━━━━━━━━━━━━━━━━━━━\n"
-                if status["is_collecting"]:
-                    txt += "🔄 <b>الحالة: جاري فحص وتحديث البيانات لحظياً...</b>\n"
-                else:
-                    txt += "✅ <b>الحالة: مكتمل — البوت يعمل ويحرس السوق</b>\n"
-                txt += "━━━━━━━━━━━━━━━━━━━━\n"
-                
-                # تفاصيل فريم 5 دقائق (الرئيسي)
-                txt += f"📦 <b>فريم 5 دقائق (فريم الاستراتيجية الرئيسي):</b>\n"
-                txt += f"• العملات النشطة: {status['symbols_5m']}/{status['total_assets']} عملة\n"
-                txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_5m'] else '⏳ جاري الحفظ'}\n"
-                if status["age_5m"] is not None:
-                    txt += f"• عمر البيانات: {status['age_5m']:.0f} دقيقة\n"
-                txt += "\n"
-                
-                # تفاصيل فريم 1 دقيقة
-                txt += f"📦 <b>فريم 1 دقيقة:</b>\n"
-                txt += f"• العملات: {status['symbols_1m']}/{status['total_assets']} عملة\n"
-                txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_1m'] else '⏳ جاري الحفظ'}\n"
-                txt += "━━━━━━━━━━━━━━━━━━━━\n"
-                
-                # حالة المحرك
-                if ENGINE_RES:
-                    gate = ENGINE_RES.get('gate', {})
-                    txt += "🤖 <b>المحرك الذكي:</b>\n"
-                    txt += "• الاستراتيجية: V5 Ultra (3 معاملات)\n"
-                    txt += f"• فحص العملات: {gate.get('checked', status['symbols_5m'])} عملة\n"
-                    txt += f"• صفقات مفتوحة حالياً: {len(LATEST_OPEN_POSITIONS)}\n"
-                    txt += f"• زمن الفحص: {status['last_cycle_secs']:.1f} ثانية\n"
-                    if status["last_cycle"]:
-                        txt += f"• توقيت آخر فحص: {status['last_cycle'][:19].replace('T', ' ')} UTC\n"
-                else:
-                    txt += "🤖 <b>المحرك:</b> ⏳ قيد الفحص الأولي (ثوانٍ قليلة)\n"
-                    txt += "💡 اضغط 🔄 تحديث مباشر للعرض الفوري\n"
-                    
-                txt += "━━━━━━━━━━━━━━━━━━━━\n"
-                txt += "🔄 التحديث دوري وتلقائي على مدار الساعة"
-                send_msg(chat_id, txt, back_kb([[bt("🔄 تحديث مباشر", "bt:live:page:0"), bt("📊 المحفظة", "m:port")]]), msg_id=msg_id)
+                txt, kb = get_live_page_content()
+                res = send_msg(chat_id, txt, kb, msg_id=msg_id)
+                mid = msg_id or (res.get("message_id") if isinstance(res, dict) else None)
+                register_live_viewer(chat_id, mid, "live", kb=kb, last_text=txt)
             except Exception as e:
                 log(f"[LIVE PAGE] {e} {traceback.format_exc()}")
                 send_msg(chat_id, f"⚡ خطأ: {esc(str(e))}", api_back_kb(), msg_id=msg_id)
@@ -2185,6 +2354,7 @@ def main():
         save_state()
         log(f"[BOOT] تم تعيين المشرف من البيئة: {ADMIN_CHAT_ID}")
     threading.Thread(target=cycle_loop, daemon=True, name="cycle").start()
+    threading.Thread(target=live_auto_refresher_loop, daemon=True, name="live_auto_refresher").start()
     threading.Thread(target=watch_loop, daemon=True, name="watch").start()
     def _boot_welcome_when_ready():
         for _ in range(20):
