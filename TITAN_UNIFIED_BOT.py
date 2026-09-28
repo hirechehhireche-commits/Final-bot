@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -81,6 +82,12 @@ POOL_WEIGHT_OF_TOTAL = {"P1": 0.35, "P2": 0.15, "P3": 0.12, "S2": 0.20, "GS": 0.
 BINANCE_HOSTS = ["https://data-api.binance.vision","https://api.binance.com","https://api1.binance.com"]
 _host_health = {h: 0 for h in BINANCE_HOSTS}
 
+# جلسات HTTP دائمة مع Connection Pooling لسرعة استجابة فائقة
+BINANCE_SESSION = requests.Session()
+_bn_adapter = requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=1)
+BINANCE_SESSION.mount("https://", _bn_adapter)
+BINANCE_SESSION.mount("http://", _bn_adapter)
+
 def log(msg: str):
     if BOT_TOKEN: msg = str(msg).replace(BOT_TOKEN, "[BOT_TOKEN]")
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -92,7 +99,7 @@ def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list 
     last_err = None
     for h in ordered:
         try:
-            r = requests.get(h + path, params=params or {}, timeout=timeout)
+            r = BINANCE_SESSION.get(h + path, params=params or {}, timeout=timeout)
             if r.status_code == 200:
                 _host_health[h] = 0
                 return r.json()
@@ -179,7 +186,6 @@ def save_state():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_STATE, f, ensure_ascii=False, default=str)
             f.flush()
-            os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
         os.replace(tmp, STATE_FILE)
 def get_user(chat_id: int, create: bool = True) -> dict:
@@ -239,45 +245,77 @@ def deobfuscate(s: str) -> str:
     return bytes(b ^ kb[i % len(kb)] for i, b in enumerate(raw)).decode("utf-8")
 
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+
+# جلسة تيليجرام دائمة مع Connection Pool وسرعة استجابة فورية
+TG_SESSION = requests.Session()
+_tg_adapter = requests.adapters.HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=1)
+TG_SESSION.mount("https://", _tg_adapter)
+TG_SESSION.mount("http://", _tg_adapter)
+
 def esc(t) -> str:
     return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-def tg(method: str, retries: int = 3, **params):
+
+def tg(method: str, retries: int = 2, timeout: float = 6.0, **params):
     if not BOT_TOKEN:
         return None
     url = f"{TG_API}/{method}"
+    if method == "getUpdates":
+        timeout = float(params.get("timeout", 20)) + 4.0
     for attempt in range(retries):
         try:
-            r = requests.post(url, json=params, timeout=30)
+            r = TG_SESSION.post(url, json=params, timeout=timeout)
             data = r.json()
             if data.get("ok"):
                 return data.get("result")
+            desc = str(data.get("description", ""))
+            if "message is not modified" in desc:
+                return True
             if r.status_code == 429:
-                wait = (data.get("parameters") or {}).get("retry_after", 3)
-                time.sleep(wait + 0.5)
+                wait = (data.get("parameters") or {}).get("retry_after", 2)
+                time.sleep(wait + 0.1)
                 continue
-            log(f"[TG] {method} فشل: {data}")
+            log(f"[TG] {method} تنبيه: {desc}")
             return None
         except Exception as e:
-            log(f"[TG] {method} محاولة {attempt + 1} خطأ: {e}")
-            time.sleep(1.5 * (attempt + 1))
+            if attempt == retries - 1 and method != "getUpdates":
+                log(f"[TG] {method} خطأ اتصال: {e}")
+            time.sleep(0.2)
     return None
+
+def answer_cb(cb_id, text: str = ""):
+    """إلغاء دوران الزر فورياً في التيليجرام بشكل غير متزامن فائق السرعة"""
+    if not cb_id:
+        return
+    def _fire():
+        try:
+            TG_SESSION.post(
+                f"{TG_API}/answerCallbackQuery",
+                json={"callback_query_id": cb_id, "text": text or None},
+                timeout=3.0
+            )
+        except Exception:
+            pass
+    threading.Thread(target=_fire, daemon=True).start()
+
 def send_msg(chat_id, text: str, kb=None, msg_id: int = None):
     params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     if kb:
         params["reply_markup"] = {"inline_keyboard": kb}
     if msg_id:
         params["message_id"] = msg_id
-        return tg("editMessageText", **params)
+        res = tg("editMessageText", **params)
+        if res is not None:
+            return res
+        params.pop("message_id", None)
     return tg("sendMessage", **params)
-def answer_cb(cb_id, text: str = ""):
-    tg("answerCallbackQuery", callback_query_id=cb_id, text=text or None)
 
 def respond_cb(cb: dict, text: str, kb=None):
     try:
-        cb_id = cb.get("id","")
-        answer_cb(cb_id)
+        cb_id = cb.get("id", "")
+        if cb_id:
+            answer_cb(cb_id)
         msg = cb.get("message") or {}
-        chat_id = msg.get("chat",{}).get("id")
+        chat_id = msg.get("chat", {}).get("id") or cb.get("from", {}).get("id")
         msg_id = msg.get("message_id")
         if chat_id and msg_id:
             send_msg(chat_id, text, kb, msg_id=msg_id)
@@ -286,10 +324,10 @@ def respond_cb(cb: dict, text: str, kb=None):
     except Exception as e:
         log(f"[RESPOND_CB] {e}")
         try:
-            chat_id = (cb.get("message") or {}).get("chat",{}).get("id") or cb.get("from",{}).get("id")
+            chat_id = (cb.get("message") or {}).get("chat", {}).get("id") or cb.get("from", {}).get("id")
             if chat_id:
                 send_msg(chat_id, text, kb)
-        except:
+        except Exception:
             pass
 
 def fmt_entry(p: dict, w2: float = 0.82, holds: dict = None) -> str:
@@ -1687,6 +1725,11 @@ def handle_text_message(msg: dict):
         send_msg(chat_id, "👋 أهلاً\nاضغط 🎛️ لفتح لوحة التحكم", more_kb())
 
 def handle_callback(cb: dict):
+    # إلغاء دوران زر التيليجرام فورياً في أول 1 ميلي ثانية
+    cb_id = cb.get("id")
+    if cb_id:
+        answer_cb(cb_id)
+        
     data = cb.get("data","")
     chat_id = (cb.get("message") or {}).get("chat", {}).get("id") or cb.get("from", {}).get("id")
     msg_id = (cb.get("message") or {}).get("message_id")
@@ -1819,7 +1862,6 @@ def handle_callback(cb: dict):
                 # إذا المحرك لم يبدأ بعد وليس قيد الفحص، شغله فوراً في الخلفية
                 if ENGINE_RES is None and not CYCLE_LOCK.locked():
                     threading.Thread(target=run_cycle, args=("manual_live",), daemon=True).start()
-                    time.sleep(0.8)
                     
                 status = get_data_collection_status()
                 txt = "⚡ <b>حالة جمع البيانات — مباشر</b>\n"
@@ -2048,30 +2090,35 @@ def boot_welcome_admin():
     if aid:
         send_msg(aid, f"✅ البوت يعمل\n{STRATEGY_PROVENANCE}", more_kb())
 
+UPDATE_EXECUTOR = ThreadPoolExecutor(max_workers=20, thread_name_prefix="tg_fast")
+
+def _safe_dispatch_update(upd: dict):
+    try:
+        handle_update(upd)
+    except Exception as e:
+        log(f"[POLL_DISPATCH] خطأ: {e}\n{traceback.format_exc()}")
+
 def poll_loop():
     st = load_state()
     offset = st.get("tg_offset")
     while True:
         try:
-            params = {"timeout": 25, "allowed_updates": ["message","callback_query"]}
+            params = {"timeout": 20, "allowed_updates": ["message", "callback_query"]}
             if offset:
                 params["offset"] = offset
             ups = tg("getUpdates", retries=2, **params)
             if ups is None:
-                time.sleep(3)
+                time.sleep(1)
                 continue
             for upd in ups:
                 offset = upd["update_id"] + 1
-                try:
-                    handle_update(upd)
-                except Exception as e:
-                    log(f"[POLL] خطأ: {e}\n{traceback.format_exc()}")
-            st = load_state()
-            st["tg_offset"] = offset
-            save_state()
+                # معالجة كل ضغطة زر أو رسالة فورياً في خيط مستقل فائق السرعة دون أي انتظار
+                UPDATE_EXECUTOR.submit(_safe_dispatch_update, upd)
+            if ups:
+                _STATE["tg_offset"] = offset
         except Exception as e:
             log(f"[POLL] خطأ الحلقة: {e}")
-            time.sleep(5)
+            time.sleep(2)
 
 class _BaseHealthHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
