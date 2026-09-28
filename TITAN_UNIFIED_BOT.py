@@ -1727,7 +1727,7 @@ def handle_text_message(msg: dict):
         send_msg(chat_id, "👋 أهلاً\nاضغط 🎛️ لفتح لوحة التحكم", more_kb())
 
 
-# ============ نظام التحديث اللحظي الحي التلقائي (بدون ضغط أزرار) ============
+# ============ نظام التحديث اللحظي الذكي للأرقام فقط (منع وميض الشاشة) ============
 LIVE_VIEWERS = {}
 LIVE_VIEWERS_LOCK = threading.Lock()
 
@@ -1760,35 +1760,33 @@ def get_live_page_content() -> tuple:
     
     # تفاصيل فريم 5 دقائق (الرئيسي)
     txt += f"📦 <b>فريم 5 دقائق (فريم الاستراتيجية الرئيسي):</b>\n"
-    txt += f"• العملات النشطة: {status['symbols_5m']}/{status['total_assets']} عملة\n"
+    txt += f"• العملات النشطة: <code>{status['symbols_5m']}/{status['total_assets']}</code> عملة\n"
     txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_5m'] else '⏳ جاري الحفظ'}\n"
-    if status["age_5m"] is not None:
-        txt += f"• عمر البيانات: {status['age_5m']:.0f} دقيقة\n"
     txt += "\n"
     
     # تفاصيل فريم 1 دقيقة
     txt += f"📦 <b>فريم 1 دقيقة:</b>\n"
-    txt += f"• العملات: {status['symbols_1m']}/{status['total_assets']} عملة\n"
+    txt += f"• العملات: <code>{status['symbols_1m']}/{status['total_assets']}</code> عملة\n"
     txt += f"• الكاش: {'✅ موجود وجاهز' if status['has_cache_1m'] else '⏳ جاري الحفظ'}\n"
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
     
     # حالة المحرك
-    open_count = len([p for p in LATEST_OPEN_POSITIONS if p.get('status') == 'OPEN']) if 'LATEST_OPEN_POSITIONS' in globals() else 0
+    open_pos_list = [p for p in get_open_positions() if p.get('status') == 'OPEN']
+    open_count = len(open_pos_list)
     if ENGINE_RES:
         gate = ENGINE_RES.get('gate', {})
         txt += "🤖 <b>المحرك الذكي:</b>\n"
         txt += "• الاستراتيجية: V5 Ultra (3 معاملات)\n"
-        txt += f"• فحص العملات: {gate.get('checked', status['symbols_5m'])} عملة\n"
-        txt += f"• صفقات مفتوحة حالياً: {open_count}\n"
-        txt += f"• زمن الفحص: {status['last_cycle_secs']:.1f} ثانية\n"
+        txt += f"• فحص العملات: <code>{gate.get('checked', status['symbols_5m'])}</code> عملة ⚡\n"
+        txt += f"• صفقات مفتوحة حالياً: <code>{open_count}</code> صفقة\n"
+        txt += f"• زمن الفحص: <code>{status['last_cycle_secs']:.1f}</code> ثانية\n"
         if status["last_cycle"]:
-            txt += f"• توقيت آخر فحص: {status['last_cycle'][:19].replace('T', ' ')} UTC\n"
+            txt += f"• آخر فحص مكتمل: <code>{status['last_cycle'][:19].replace('T', ' ')} UTC</code>\n"
     else:
         txt += "🤖 <b>المحرك:</b> ⏳ قيد الفحص الأولي (ثوانٍ قليلة)\n"
         
-    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    txt += "🟢 <b>أرقام النظام محدثة لحظياً وتلقائياً</b>"
     kb = back_kb([[bt("🔄 تحديث يدوي", "bt:live:page:0"), bt("📊 المحفظة", "m:port")]])
     return txt, kb
 
@@ -1818,40 +1816,46 @@ def get_guard_content(u: dict, chat_id: int) -> tuple:
             t1 = float(p.get('t1', 0))
             t2 = float(p.get('t2', 0))
             sl = float(p.get('sl', 0))
-            sign = "🟢" if pnl >= 0 else "🔴"
-            txt += f"{sign} <b>{sym} {pos_id}</b>: دخول <code>{entry:.4f}</code> | سعر الآن <code>{curr:.4f}</code> ({pnl:+.2f}%)\n"
+            
+            tick = p.get('tick_dir', 'NONE')
+            if tick == "UP":
+                tick_icon = "🟢▲"
+            elif tick == "DOWN":
+                tick_icon = "🔴▼"
+            else:
+                tick_icon = "🟢" if pnl >= 0 else "🔴"
+                
+            txt += f"{tick_icon} <b>{sym} {pos_id}</b>: دخول <code>{entry:.4f}</code> | سعر الآن <code>{curr:.4f}</code> (<code>{pnl:+.2f}%</code>)\n"
             txt += f"  🎯 T1: <code>{t1:.4f}</code> | T2: <code>{t2:.4f}</code> | 🛑 SL: <code>{sl:.4f}</code>\n\n"
     
     if not has_any:
         cap = float(acc.get('capital', 0)) if acc else 0
         txt += "💤 <b>لا توجد صفقات مفتوحة حالياً</b>\n\n"
         if cap > 0:
-            txt += f"💰 الرصيد الحر على المنصة: {cap:.2f} USDT\n"
+            txt += f"💰 الرصيد الحر على المنصة: <code>{cap:.2f}</code> USDT\n"
         txt += "🔔 سيقوم البوت بفتح الصفقات ومتابعتها تلقائياً عند ظهور أول إشارة مطابقة.\n"
         
-    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
     txt += "━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    txt += "🟢 <b>أرقام الصفقات تومض وتتحدث تلقائياً مع حركة الأسعار</b>"
     kb = back_kb([[bt("🔄 تحديث يدوي", "m:guard"), bt("📊 المحفظة", "m:port")]])
     return txt, kb
 
 def get_port_content(u: dict) -> tuple:
     txt = portfolio_text(u)
-    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>الأرقام مربوطة بالمحفظة وتتحدث تلقائياً</b>"
     kb = back_kb()
     return txt, kb
 
 def get_sig_content(u: dict) -> tuple:
     txt = latest_signals_text(u)
-    now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>تحديث لحظي مباشر تلقائي:</b> <code>{now_utc} UTC</code>"
+    txt += f"\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>رادار الإشارات يعمل لحظياً وتلقائياً</b>"
     kb = back_kb([[bt("🔄 تحديث يدوي", "m:sig")]])
     return txt, kb
 
 def _quick_update_open_positions_prices():
     try:
-        open_pos = [p for p in get_open_positions() if p.get("status") == "OPEN"]
+        st = load_state()
+        open_pos = [p for p in st.get("open_positions", []) if p.get("status") == "OPEN"]
         if not open_pos:
             return
         symbols = list(set([p.get("ticker") for p in open_pos if p.get("ticker")]))
@@ -1867,20 +1871,30 @@ def _quick_update_open_positions_prices():
                 pass
         if prices:
             changed = False
+            now_cur = time.time()
             for p in open_pos:
                 sym = p.get("ticker")
-                if sym in prices and abs(prices[sym] - float(p.get("current_price", 0))) > 1e-8:
-                    p["current_price"] = prices[sym]
-                    changed = True
+                if sym in prices:
+                    new_p = prices[sym]
+                    old_p = float(p.get("current_price", 0))
+                    if abs(new_p - old_p) > 1e-8:
+                        p["prev_price"] = old_p
+                        p["current_price"] = new_p
+                        p["tick_dir"] = "UP" if new_p > old_p else ("DOWN" if new_p < old_p else "NONE")
+                        p["last_tick_time"] = now_cur
+                        changed = True
+                    elif now_cur - float(p.get("last_tick_time", 0)) > 6 and p.get("tick_dir") != "STABLE":
+                        p["tick_dir"] = "STABLE"
+                        changed = True
             if changed:
                 save_state()
     except Exception:
         pass
 
 def live_auto_refresher_loop():
-    """حلقة التحديث اللحظي التلقائي — تعدل الرسائل المفتوحة دورياً بدون ضغط أزرار"""
+    """حلقة التحديث اللحظي التلقائي — تعدل الأرقام فقط عند تغيرها بدون وميض الشاشة"""
     while True:
-        time.sleep(2.5)
+        time.sleep(3.0)
         try:
             if not LIVE_VIEWERS:
                 continue
@@ -1914,21 +1928,18 @@ def live_auto_refresher_loop():
                 if not new_txt or not msg_id:
                     continue
                     
-                # إذا تغير المحتوى أو مضت 5 ثوانٍ، نرسل تعديل الرسالة
+                # التعديل فقط وحصراً عند تغير الأرقام أو البيانات (منع وميض الشاشة بالكامل)
                 if new_txt != viewer.get("last_text"):
                     kb_markup = {"inline_keyboard": new_kb} if new_kb else None
-                    res = tg("editMessageText", chat_id=cid, message_id=msg_id, text=new_txt,
-                             reply_markup=kb_markup, parse_mode="HTML", timeout=3.5)
-                    if res is None:
-                        # إذا فشل التعديل (مثلاً حذف المستخدم الرسالة)، نلغي تسجيله
-                        pass
+                    tg("editMessageText", chat_id=cid, message_id=msg_id, text=new_txt,
+                       reply_markup=kb_markup, parse_mode="HTML", timeout=3.5)
                     viewer["last_text"] = new_txt
                     viewer["last_refresh"] = now_t
         except Exception:
             pass
 
 def trigger_immediate_live_refresh():
-    """تحديث فوري لكل الشاشات النشطة بمجرد انتهاء دورة الفحص"""
+    """تحديث فوري لكل الشاشات النشطة بمجرد انتهاء دورة الفحص وتغير الأرقام"""
     try:
         if not LIVE_VIEWERS:
             return
@@ -1948,7 +1959,8 @@ def trigger_immediate_live_refresh():
                 new_txt, new_kb = get_port_content(u)
             elif screen == "sig":
                 new_txt, new_kb = get_sig_content(u)
-            if new_txt and msg_id:
+            # التعديل فقط إذا تغيرت الأرقام الفعلية لمنع وميض الشاشة
+            if new_txt and msg_id and new_txt != viewer.get("last_text"):
                 kb_markup = {"inline_keyboard": new_kb} if new_kb else None
                 tg("editMessageText", chat_id=cid, message_id=msg_id, text=new_txt,
                    reply_markup=kb_markup, parse_mode="HTML", timeout=3.0)
