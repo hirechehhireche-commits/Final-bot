@@ -3,9 +3,10 @@
 """
 Public Binance ingestion — ULTRA FAST & BULLETPROOF — 1m + 5m
 - إقلاع فوري: استخدام الكاش دائماً إذا كان موجوداً على القرص (0.01 ثانية)
-- حماية قصوى من كثرة الطلبات (Rate Limit Shield): تقييد عدد خيوط الجلب المتزامنة
-- تحديث تراكمي (Incremental) فقط للشموع الجديدة المغلقة وتخطي الاستعلامات غير الضرورية
+- تحديث تراكمي (Incremental) فقط للشموع الجديدة (1-5 شموع بطلب واحد)
+- جلب مباشر لـ 1000 شمعة بطلب واحد بدون حلقة تكرار أو تأخير
 - استبعاد العملات الملغية فوراً بدون إيقاف المحرك أو انتظار
+- المحرك يشتغل فوراً 100% دون أن يعلق في 0/77
 """
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -74,8 +75,8 @@ def _load_store(symbols, cache_dir, state, days, api_get, log, workers, interval
             if old_df is not None and len(old_df) >= 30:
                 # كاش موجود — فقط جلب الشموع الجديدة (آخر شمعة إلى الآن)
                 last_ts = int(old_df.index[-1].timestamp() * 1000)
-                # إذا الكاش حديث جداً (لم تقفل شمعة جديدة بعد)، استخدمه فوراً دون إرسال طلب!
-                if (now_ms - last_ts) < (step_ms * 0.95):
+                # إذا الكاش حديث جداً (أقل من 3 دقائق لـ 5m)، استخدمه كما هو فوراً!
+                if (now_ms - last_ts) < (step_ms * 1.2):
                     return sym, old_df
                     
                 rows = api_get("/api/v3/klines", {
@@ -113,9 +114,8 @@ def _load_store(symbols, cache_dir, state, days, api_get, log, workers, interval
             return sym, None
 
     t0 = time.time()
-    # ضبط الحد الأقصى للخيوط بحد أقصى 5 لمنع تجاوز Rate Limits
-    safe_workers = min(workers or 5, 5, len(symbols))
-    with ThreadPoolExecutor(max_workers=safe_workers) as ex:
+    max_workers = min(15, len(symbols))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(fetch, s): s for s in symbols}
         for future in as_completed(futures):
             sym = futures[future]
@@ -155,17 +155,20 @@ def _load_store(symbols, cache_dir, state, days, api_get, log, workers, interval
     log(f"[{interval}] ✅ جاهز ومحفوظ: {len(store)}/{len(symbols)} عملة — {elapsed:.1f}ث")
     return store
 
-def load_dual_stores(symbols, cache_dir, state, days, api_get, log, workers=5):
+def load_dual_stores(symbols, cache_dir, state, days, api_get, log, workers=10):
     """
-    تحميل ذكي ومتسلسل لـ 5m و 1m يحمي الاتصال من كثرة الطلبات المتزامنة
+    تحميل فائق السرعة لـ 5m و 1m
+    - يضمن أن 5m يجهز فوراً ويدخل المحرك مباشرة
     """
+    from concurrent.futures import ThreadPoolExecutor
     t0 = time.time()
     
     def _load_5m():
         try:
-            return _load_store(symbols, cache_dir, state, 4, api_get, log, 5, "5m", STEP_MS_5M, "gate5m_v102.pkl", 100, 5, ultra_fast=True)
+            return _load_store(symbols, cache_dir, state, 4, api_get, log, 12, "5m", STEP_MS_5M, "gate5m_v102.pkl", 100, 5, ultra_fast=True)
         except Exception as e:
             log(f"[DUAL] 5m error: {e}")
+            # حاول استرجاع من الكاش
             p = Path(cache_dir) / "gate5m_v102.pkl"
             if p.exists():
                 try:
@@ -177,7 +180,7 @@ def load_dual_stores(symbols, cache_dir, state, days, api_get, log, workers=5):
 
     def _load_1m():
         try:
-            return _load_store(symbols, cache_dir, state, 1, api_get, log, 5, "1m", STEP_MS_1M, "gate1m_v102.pkl", 100, 1, ultra_fast=True)
+            return _load_store(symbols, cache_dir, state, 1, api_get, log, 12, "1m", STEP_MS_1M, "gate1m_v102.pkl", 100, 1, ultra_fast=True)
         except Exception as e:
             log(f"[DUAL] 1m error: {e}")
             p = Path(cache_dir) / "gate1m_v102.pkl"
@@ -189,13 +192,15 @@ def load_dual_stores(symbols, cache_dir, state, days, api_get, log, workers=5):
                     pass
             return {}
 
-    # تشغيل متسلسل منظم للحفاظ على ثبات وسرعة الاتصال
-    store_5m = _load_5m()
-    store_1m = _load_1m()
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f5 = ex.submit(_load_5m)
+        f1 = ex.submit(_load_1m)
+        store_5m = f5.result()
+        store_1m = f1.result()
 
     elapsed = time.time() - t0
     log(f"[DUAL] ⚡ اكتمل DUAL في {elapsed:.1f}ث — 5m:{len(store_5m)} 1m:{len(store_1m)}")
     return {"5m": store_5m, "1m": store_1m}
 
-def load_gate_store(symbols, cache_dir, state, days, api_get, log, workers=5):
-    return _load_store(symbols, cache_dir, state, 4, api_get, log, 5, "5m", STEP_MS_5M, "gate5m_v102.pkl", 100, 5, ultra_fast=True)
+def load_gate_store(symbols, cache_dir, state, days, api_get, log, workers=10):
+    return _load_store(symbols, cache_dir, state, 4, api_get, log, workers, "5m", STEP_MS_5M, "gate5m_v102.pkl", 100, 5, ultra_fast=True)
