@@ -258,7 +258,9 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                     B.save_state()
                     raw=str(e)
                     if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                        err='⏳ Binance مشغول حالياً (كثرة الطلبات -1003)\n\n• السبب: السيرفر يرسل كثير طلبات بيانات السوق + طلب التحقق في نفس اللحظة\n• الحل: انتظر دقيقة واحدة ثم أعد المحاولة\n• تأكد أيضاً:\n  - المفتاح Spot فقط بلا سحب\n  - IP الخادم مضاف في قائمة IP المسموحة (إن كنت مفعل IP Restriction)\n  - أو عطّل IP Restriction مؤقتاً للتجربة\n\nسيتم حل المشكلة تلقائياً بعد دقيقة.'
+                        err='⏳ سيرفرات Binance تواجه ضغطاً مؤقتاً (-1003)\n\n• تم تفعيل درع المرايا البديلة تلقائياً.\n• يرجى الانتظار 30 ثانية ثم الضغط على زر (ربط binance) مرة أخرى.\n• تأكد أيضاً من تفعيل صلاحية Spot Trading بدون سحب.'
+                    elif any(bad in raw for bad in ('-2014', '-2015', 'API-key', 'المفتاح', 'credentials')):
+                        err='❌ مفتاح API أو Secret غير صحيح، أو تم تقييد الـ IP في إعدادات Binance.\n• تأكد من نسخ المفتاح والسر بدقة\n• تأكد من تفعيل صلاحية Spot Trading بدون سحب\n• في إعدادات المفتاح في Binance اختر (Unrestricted) لتقييد IP أو أضف IP السيرفر.'
                     else:
                         err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                     B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
@@ -330,7 +332,9 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                 B.save_state()
                 raw=str(e)
                 if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                    err='⏳ Binance مشغول (كثرة الطلبات -1003) — انتظر دقيقة وأعد المحاولة.\n• أضف IP الخادم في whitelist أو عطّل IP Restriction مؤقتاً.'
+                    err='⏳ سيرفرات Binance تواجه ضغطاً مؤقتاً (-1003)\n\n• تم تفعيل درع المرايا البديلة تلقائياً.\n• يرجى الانتظار 30 ثانية ثم الضغط على زر (ربط binance) مرة أخرى.\n• تأكد أيضاً من تفعيل صلاحية Spot Trading بدون سحب.'
+                elif any(bad in raw for bad in ('-2014', '-2015', 'API-key', 'المفتاح', 'credentials')):
+                    err='❌ مفتاح API أو Secret غير صحيح، أو تم تقييد الـ IP في إعدادات Binance.\n• تأكد من نسخ المفتاح والسر بدقة\n• تأكد من تفعيل صلاحية Spot Trading بدون سحب\n• في إعدادات المفتاح في Binance اختر (Unrestricted) لتقييد IP أو أضف IP السيرفر.'
                 else:
                     err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                 B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))

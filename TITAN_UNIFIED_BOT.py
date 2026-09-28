@@ -47,7 +47,7 @@ STATE_FILE = os.environ.get("TITAN_STATE_FILE", os.path.join(SCRIPT_DIR, "bot_st
 WORKSPACE_DIR = os.environ.get("TITAN_CACHE_DIR", SCRIPT_DIR)
 DATA_DAYS = int(os.environ.get("TITAN_GATE_DAYS", "60"))
 CYCLE_DELAY_SEC = int(os.environ.get("TITAN_CYCLE_DELAY", "15"))
-FETCH_WORKERS = int(os.environ.get("TITAN_FETCH_WORKERS", "6"))
+FETCH_WORKERS = int(os.environ.get("TITAN_FETCH_WORKERS", "5"))
 HEALTH_PORT = int(os.environ.get("PORT", "8080"))
 PAPER_CAPITAL = 400.0
 MAX_SEEN_EVENTS = 6000
@@ -87,7 +87,7 @@ POOL_PARAMS_MAP = {
 }
 POOL_WEIGHT_OF_TOTAL = {"P1": 0.35, "P2": 0.15, "P3": 0.12, "S2": 0.20, "GS": 0.38}
 
-BINANCE_HOSTS = ["https://data-api.binance.vision","https://api.binance.com","https://api1.binance.com"]
+BINANCE_HOSTS = ["https://data-api.binance.vision","https://api1.binance.com","https://api2.binance.com","https://api3.binance.com","https://api.binance.com"]
 _host_health = {h: 0 for h in BINANCE_HOSTS}
 
 # جلسات HTTP دائمة مع Connection Pooling لسرعة استجابة فائقة
@@ -106,14 +106,20 @@ def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list 
     ordered = sorted(hosts, key=lambda h: _host_health.get(h, 0))
     last_err = None
     for h in ordered:
+        if _host_health.get(h, 0) >= 10:
+            continue
         try:
             r = BINANCE_SESSION.get(h + path, params=params or {}, timeout=timeout)
             if r.status_code == 200:
-                _host_health[h] = 0
+                _host_health[h] = max(0, _host_health.get(h, 0) - 1)
                 return r.json()
             # إذا كان الرمز ملغياً أو غير موجود في بايننس، لا داعي لتكرار المحاولة على باقي المرايا
             if r.status_code == 400 and ("-1121" in r.text or "Invalid symbol" in r.text):
                 raise ValueError(f"رمز ملغي: {params.get('symbol') if params else ''}")
+            if r.status_code in (418, 429) or "-1003" in r.text:
+                _host_health[h] = _host_health.get(h, 0) + 15
+                last_err = f"HTTP {r.status_code} (Rate Limit -1003)"
+                continue
             last_err = f"HTTP {r.status_code}: {r.text[:120]}"
             _host_health[h] = _host_health.get(h, 0) + 1
         except ValueError:
@@ -121,7 +127,15 @@ def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list 
         except Exception as e:
             last_err = str(e)
             _host_health[h] = _host_health.get(h, 0) + 1
-        time.sleep(0.2)
+        time.sleep(0.05)
+    if last_err and "Rate Limit" in str(last_err):
+        time.sleep(0.5)
+        try:
+            r = BINANCE_SESSION.get(hosts[0] + path, params=params or {}, timeout=timeout)
+            if r.status_code == 200:
+                return r.json()
+        except:
+            pass
     raise RuntimeError(f"فشل الجلب من كل المرايا ({path}): {last_err}")
 
 STATE_LOCK = threading.RLock()
@@ -1952,14 +1966,30 @@ def _quick_update_open_positions_prices():
         symbols = list(set([p.get("ticker") for p in open_pos if p.get("ticker")]))
         if not symbols:
             return
-        prices = {}
-        for s in symbols:
+        now_cur = time.time()
+        last_fetch = getattr(_quick_update_open_positions_prices, "_last_fetch", 0.0)
+        cached_prices = getattr(_quick_update_open_positions_prices, "_cached_prices", {})
+        if (now_cur - last_fetch) < 4.0 and cached_prices:
+            prices = cached_prices
+        else:
+            prices = {}
             try:
-                res = _binance_get("/api/v3/ticker/price", {"symbol": s}, timeout=2)
-                if isinstance(res, dict) and "price" in res:
-                    prices[s] = float(res["price"])
+                if len(symbols) == 1:
+                    res = _binance_get("/api/v3/ticker/price", {"symbol": symbols[0]}, timeout=3)
+                    if isinstance(res, dict) and "price" in res:
+                        prices[symbols[0]] = float(res["price"])
+                else:
+                    import json
+                    res = _binance_get("/api/v3/ticker/price", {"symbols": json.dumps(symbols)}, timeout=3)
+                    if isinstance(res, list):
+                        for item in res:
+                            if isinstance(item, dict) and "symbol" in item:
+                                prices[item["symbol"]] = float(item["price"])
+                if prices:
+                    _quick_update_open_positions_prices._last_fetch = now_cur
+                    _quick_update_open_positions_prices._cached_prices = prices
             except Exception:
-                pass
+                prices = cached_prices
         if prices:
             changed = False
             now_cur = time.time()
