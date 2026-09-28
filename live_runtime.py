@@ -495,21 +495,8 @@ def callback(cb,u):
                     pass
                 B.respond_cb(cb,text[:3800],keyboard(u))
             except Exception as e:
-                raw=str(e)
-                if '-1003' in raw or 'كثرة الطلبات' in raw or 'banned' in raw or 'ALL_HOSTS_FAILED' in raw or '418' in raw or '429' in raw:
-                    cooldown_text = (
-                        "⏳ <b>خوادم Binance تفرض ضغطاً مؤقتاً على IP الاستضافة (-1003)</b>\n"
-                        "━━━━━━━━━━━━━━━━━━━━\n"
-                        "🔒 <b>السبب:</b> في خطة Render المجانية، تتشارك مئات التطبيقات نفس عنوان IP الخارجي الموجه نحو Binance، مما يتسبب في بلوغ سقف الطلبات لدى بايننس.\n\n"
-                        "🛡️ <b>المفتاح مربوط ومحفوظ ومشفّر بنجاح:</b>\n"
-                        "البوت يقوم بالتنقل التلقائي بين 6 مرايا رسمية (GCP، api1، api2، api3، api4، api).\n\n"
-                        "💡 <b>الحلول المتاحة:</b>\n"
-                        "1️⃣ انتظر قليلاً ثم اضغط 👁️ أرصدتي مجدداً.\n"
-                        "2️⃣ أو أضف بروكسي خاص في إعدادات Render باسم <code>BINANCE_PROXY</code> لتخطي حظر IP الاستضافة نهائياً."
-                    )
-                    B.respond_cb(cb, cooldown_text, keyboard(u))
-                else:
-                    B.respond_cb(cb,f'⚠️ خطأ جلب الرصيد: {B.esc(raw[:150])}',keyboard(u))
+                text=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
+                B.respond_cb(cb,'⚠️ خطأ جلب الرصيد: '+B.esc(text),keyboard(u))
         elif data=='api:orders':
             a=account(uid)
             lines=['📂 <b>دفتر التنفيذ الفعلي للبوت — v241 سهل+تراكمي</b>']

@@ -1,13 +1,10 @@
 """Small allowlisted Binance Spot REST client. Never logs URLs/keys/signatures.
 No withdrawal, margin, futures or account-wide cancel endpoints are implemented.
-v245 TITAN RESILIENT — Multi-Cluster Automatic Failover with GCP Edge & Proxy Support
+v217 AURORA — Fixed bugs + FeeAware v5 support (Clean & Simple)
 """
 import hashlib
 import hmac
 import time
-import re
-import json
-import os
 from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode
 import requests
@@ -23,66 +20,37 @@ def floor_step(value, step):
     return (value / step).to_integral_value(rounding=ROUND_DOWN) * step
 
 class ExchangeError(Exception):
-    def __init__(self, code, uncertain=False, msg=""):
-        self.code, self.uncertain, self.msg = code, uncertain, msg
-        err_text = f"Binance code={code}"
-        if msg:
-            err_text += f" ({msg})"
-        err_text += "; " + ('نتيجة غير مؤكدة — يلزم الاستعلام' if uncertain else 'رُفض الطلب')
-        super().__init__(err_text)
-
-# ترتيب المرايا الرسمية لبايننس — نضع خادم Google Cloud Platform (api-gcp) في البداية
-# لأن شبكته وسيرفراته مستقلة تماماً عن سيرفرات AWS/Cloudflare التي غالباً ما تتأثر بضغط استضافة Render
-BINANCE_LIVE_HOSTS = [
-    'https://api-gcp.binance.com',
-    'https://api1.binance.com',
-    'https://api2.binance.com',
-    'https://api3.binance.com',
-    'https://api4.binance.com',
-    'https://api.binance.com'
-]
+    def __init__(self, code, uncertain=False):
+        self.code, self.uncertain = code, uncertain
+        super().__init__(f'Binance code={code}; ' + ('نتيجة غير مؤكدة — يلزم الاستعلام' if uncertain else 'رُفض الطلب'))
 
 class BinanceSpot:
     def __init__(self, key, secret, venue='live', session=None):
         if venue not in ('live','testnet'): raise ValueError('Unknown venue')
         self.key, self.secret, self.venue = (key or '').strip(), (secret or '').strip(), venue
-        self.hosts = list(BINANCE_LIVE_HOSTS) if venue == 'live' else ['https://testnet.binance.vision']
-        self.base = self.hosts[0]
+        self.base = 'https://api.binance.com' if venue == 'live' else 'https://testnet.binance.vision'
         self.session = session or requests.Session()
-        
-        # دعم تلقائي للبروكسي إن وُجد لتجاوز أي قيود لـ IP الاستضافة
-        proxy = os.environ.get('BINANCE_PROXY') or os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
-        if proxy:
-            self.session.proxies = {'http': proxy, 'https': proxy}
-            
         self.offset = 0; self.clock_at = 0; self.filters = {}
 
     def sync_time(self):
-        """مزامنة وقت السيرفر عبر Vision API بدون استهلاك أي حدود للتداول"""
         if time.time() - self.clock_at <= 1800 and self.clock_at > 0:
             return
-        # 1. جرب خادم Vision المخصص للبيانات العامة أولاً
+        # جلب وقت السيرفر بدقة عبر vision API لتوفير حدود التداول
         try:
-            r = requests.get('https://data-api.binance.vision/api/v3/time', timeout=4)
+            r = requests.get('https://data-api.binance.vision/api/v3/time', timeout=5)
             if r.status_code == 200:
-                server_time = int(r.json()['serverTime'])
-                self.offset = server_time - int(time.time() * 1000)
+                self.offset = int(r.json()['serverTime']) - int(time.time() * 1000)
                 self.clock_at = time.time()
                 return
         except Exception:
             pass
-
-        # 2. جرب عبر المرايا البديلة
-        for h in self.hosts:
-            try:
-                r = self.session.get(f"{h}/api/v3/time", timeout=4)
-                if r.status_code == 200:
-                    server_time = int(r.json()['serverTime'])
-                    self.offset = server_time - int(time.time() * 1000)
-                    self.clock_at = time.time()
-                    return
-            except Exception:
-                continue
+        try:
+            r = self.session.get(self.base + '/api/v3/time', timeout=5)
+            if r.status_code == 200:
+                self.offset = int(r.json()['serverTime']) - int(time.time() * 1000)
+                self.clock_at = time.time()
+        except Exception:
+            pass
 
     def request(self, method, path, params=None, signed=True):
         allowed = {('GET','/api/v3/time'),('GET','/api/v3/exchangeInfo'),('GET','/api/v3/ticker/price'),
@@ -90,7 +58,6 @@ class BinanceSpot:
                    ('POST','/api/v3/order'),('GET','/api/v3/order'),('DELETE','/api/v3/order'),
                    ('GET','/api/v3/myTrades')}
         if (method,path) not in allowed: raise ValueError('Endpoint not permitted')
-        
         p = dict(params or {})
         if signed:
             if not self.key or not self.secret: raise ValueError('Missing credentials')
@@ -102,110 +69,73 @@ class BinanceSpot:
             query_string += '&signature=' + hmac.new(self.secret.encode(),query_string.encode(),hashlib.sha256).hexdigest()
         headers = {'X-MBX-APIKEY': self.key} if signed else {}
         
-        last_err = None
-        # تجربة المرايا الرسمية المتعددة بالتتابع التلقائي
-        # إذا كانت مرآة ما عليها ضغط، يتم تجربة المرآة التالية فوراً دون تعطيل المستخدم
-        for host in list(self.hosts):
-            try:
-                if method == 'GET':
-                    url = host + path + ('?' + query_string if query_string else '')
-                    resp = self.session.request(method, url, headers=headers, timeout=(4, 10))
-                else:
-                    headers['Content-Type'] = 'application/x-www-form-urlencoded'
-                    resp = self.session.request(method, host + path, data=query_string, headers=headers, timeout=(4, 10))
+        try:
+            if method == 'GET':
+                url = self.base + path + ('?' + query_string if query_string else '')
+                resp = self.session.request(method, url, headers=headers, timeout=(6, 18))
+            else:
+                headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                resp = self.session.request(method, self.base + path, data=query_string, headers=headers, timeout=(6, 18))
                 
-                try: 
-                    result = resp.json()
-                except ValueError: 
-                    result = {}
-
-                if resp.status_code != 200 or (isinstance(result, dict) and result.get('code', 0) < 0):
-                    code = result.get('code', resp.status_code) if isinstance(result, dict) else resp.status_code
-                    msg = result.get('msg', '') if isinstance(result, dict) else str(resp.text[:100])
-                    
-                    # إذا كان الخطأ في المفتاح نفسه (بيانات خاطئة أو صلاحيات) نوقفه فوراً
-                    if any(str(err_c) in str(code) for err_c in [-2014, -2015, -1022, -2010]):
-                        raise ExchangeError(code, False, msg=msg)
-
-                    # إذا كان الخطأ ضغطاً أو حظر IP (418 أو 429 أو -1003)، نجرب المرآة التالية فوراً
-                    if code == -1003 or resp.status_code in (418, 429) or 'banned' in msg.lower() or 'too many' in msg.lower():
-                        last_err = ExchangeError(f'{code} (Binance مشغول - كثرة الطلبات)', True, msg=msg)
-                        continue
-
-                    raise ExchangeError(code, resp.status_code>=500 or code in (-1000,-1006,-1007), msg=msg)
-
-                # نجاح الطلب — تثبيت هذه المرآة كمرآة أساسية للمستقبل لسرعة فائقة
-                if host != self.hosts[0]:
-                    self.hosts.remove(host)
-                    self.hosts.insert(0, host)
-                    self.base = host
-                return result
-
-            except ExchangeError as ee:
-                if any(str(err_c) in str(ee.code) for err_c in [-2014, -2015, -1022, -2010]):
-                    raise
-                last_err = ee
-                continue
-            except requests.RequestException as req_err:
-                last_err = ExchangeError('NETWORK', True, msg=str(req_err))
-                continue
-
-        if last_err:
-            raise last_err
-        raise ExchangeError('ALL_HOSTS_FAILED', True, msg='تعذر الاتصال بجميع مرايا Binance')
+            try: result = resp.json()
+            except ValueError: raise ExchangeError('BAD_RESPONSE', True) from None
+            
+            if resp.status_code != 200 or (isinstance(result, dict) and result.get('code', 0) < 0):
+                code = result.get('code', resp.status_code) if isinstance(result, dict) else resp.status_code
+                msg = result.get('msg', '') if isinstance(result, dict) else str(resp.text[:100])
+                if code == -1003 or resp.status_code in (418, 429):
+                    raise ExchangeError(f'{code} (كثرة الطلبات - Binance مشغول - انتظر لحظة)', resp.status_code >= 500 or code in (-1000, -1006, -1007, -1003))
+                raise ExchangeError(code, resp.status_code >= 500 or code in (-1000, -1006, -1007))
+            return result
+        except requests.RequestException:
+            raise ExchangeError('NETWORK', True) from None
 
     def verify(self):
         last_exc = None
-        a = None
-        # تجربة الاتصال عبر المرايا بالتتابع
-        for host in self.hosts:
-            self.base = host
+        for attempt in range(3):
             try:
                 a = self.request('GET', '/api/v3/account')
-                if a and isinstance(a, dict) and a.get('canTrade') is not None:
-                    break
+                break
             except Exception as e:
                 last_exc = e
-                raw = str(e)
-                if any(err_code in raw for err_code in ['-2014', '-2015', '-1022', '-2010', 'Missing credentials']):
-                    raise
-                continue
+                if '-1003' in str(e) or 'كثرة الطلبات' in str(e):
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
         else:
-            # إذا كانت جميع المرايا محظورة على IP سيرفر Render، نعتمد التحقق المؤجل لحفظ المفتاح
             raw_err = str(last_exc) if last_exc else ''
-            if ('-1003' in raw_err or 'كثرة الطلبات' in raw_err or 'RATE_LIMIT' in raw_err or 
-                '429' in raw_err or '418' in raw_err or 'IP banned' in raw_err or 'banned until' in raw_err or 'ALL_HOSTS_FAILED' in raw_err):
-                a = {
-                    'uid': hashlib.sha256(self.key.encode()).hexdigest()[:16],
-                    'canTrade': True,
-                    'ip_deferred': True
-                }
+            if '-1003' in raw_err or 'كثرة الطلبات' in raw_err or '418' in raw_err or '429' in raw_err:
+                a = {'uid': hashlib.sha256(self.key.encode()).hexdigest()[:16], 'canTrade': True, 'ip_deferred': True}
             else:
                 raise last_exc
 
-        if not a.get('canTrade'):
-            raise ValueError('الحساب لا يسمح بالتداول')
-            
+        if not a.get('canTrade'): raise ValueError('الحساب لا يسمح بالتداول')
         if self.venue == 'live' and not a.get('ip_deferred'):
-            try:
-                p = self.request('GET', '/sapi/v1/account/apiRestrictions')
-                if p and isinstance(p, dict):
-                    if 'enableWithdrawals' in p and p.get('enableWithdrawals') is not False:
-                        raise ValueError('يجب تعطيل السحب من المفتاح — اذهب لإعدادات API وعطّل Withdraw')
-                    if not p.get('enableSpotAndMarginTrading'):
-                        raise ValueError('فعّل صلاحية Spot Trading في المفتاح')
-                    for capability in ('enableFutures', 'enableInternalTransfer', 'permitsUniversalTransfer', 'enableVanillaOptions', 'enablePortfolioMarginTrading'):
-                        if p.get(capability):
-                            raise ValueError('عطّل العقود والتحويلات؛ استخدم مفتاحًا مخصصًا للفوري فقط (Spot فقط)')
-            except ValueError:
-                raise
-            except Exception:
-                pass
+            for attempt in range(2):
+                try:
+                    p = self.request('GET', '/sapi/v1/account/apiRestrictions')
+                    break
+                except Exception as e:
+                    last_exc = e
+                    if '-1003' in str(e) or 'كثرة الطلبات' in str(e):
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    break
+            else:
+                p = {}
+                
+            if isinstance(p, dict) and 'enableWithdrawals' in p and p.get('enableWithdrawals') is not False:
+                raise ValueError('يجب تعطيل السحب من المفتاح — اذهب لإعدادات API وعطّل Withdraw')
+            if isinstance(p, dict) and p.get('enableSpotAndMarginTrading') is False:
+                raise ValueError('فعّل صلاحية Spot Trading في المفتاح')
+            if isinstance(p, dict):
+                for capability in ('enableFutures', 'enableInternalTransfer', 'permitsUniversalTransfer', 'enableVanillaOptions', 'enablePortfolioMarginTrading'):
+                    if p.get(capability):
+                        raise ValueError('عطّل العقود والتحويلات؛ استخدم مفتاحًا مخصصًا للفوري فقط (Spot فقط)')
         return a
 
     def balances(self):
-        res = self.request('GET', '/api/v3/account')
-        return {x['asset']: D(x['free']) for x in res.get('balances', [])}
+        return {x['asset']: D(x['free']) for x in self.request('GET', '/api/v3/account')['balances']}
 
     def price(self, symbol):
         # استخدام vision دائماً للأسعار لتوفير حدود التداول
@@ -299,3 +229,4 @@ class BinanceSpot:
         rate = D(fee_rate) if bnb_discount else D(0.001)
         fee = notional * rate
         return fee
+EOF
