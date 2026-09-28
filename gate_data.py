@@ -114,7 +114,7 @@ def _load_store(symbols, cache_dir, state, days, api_get, log, workers, interval
             return sym, None
 
     t0 = time.time()
-    max_workers = min(15, len(symbols))
+    max_workers = min(int(workers or 8), 10, len(symbols))
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(fetch, s): s for s in symbols}
         for future in as_completed(futures):

@@ -87,8 +87,9 @@ POOL_PARAMS_MAP = {
 }
 POOL_WEIGHT_OF_TOTAL = {"P1": 0.35, "P2": 0.15, "P3": 0.12, "S2": 0.20, "GS": 0.38}
 
-BINANCE_HOSTS = ["https://data-api.binance.vision","https://api.binance.com","https://api1.binance.com"]
+BINANCE_HOSTS = ["https://data-api.binance.vision","https://api1.binance.com","https://api2.binance.com","https://api.binance.com"]
 _host_health = {h: 0 for h in BINANCE_HOSTS}
+LAST_CYCLE_COMPLETED_AT = 0
 
 # جلسات HTTP دائمة مع Connection Pooling لسرعة استجابة فائقة
 BINANCE_SESSION = requests.Session()
@@ -1143,12 +1144,18 @@ except Exception:
     pass
 
 def run_cycle(reason: str = "scheduled"):
-    global LATEST_EVENTS, ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS, LATEST_SELL_PLANS, LATEST_OPEN_POSITIONS
+    global LATEST_EVENTS, ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS, LATEST_SELL_PLANS, LATEST_OPEN_POSITIONS, LAST_CYCLE_COMPLETED_AT
     if not CYCLE_LOCK.acquire(blocking=False):
         log(f"[CYCLE:{reason}] دورة أخرى قيد التنفيذ")
         return ENGINE_RES
     try:
         st = load_state()
+        # إذا كان هناك مستخدم يقوم بإدخال مفاتيحه الآن، نؤجل جلب البيانات الثقيل لإعطاء أولوية كاملة للربط
+        users = st.get("users", {})
+        if any(isinstance(u, dict) and u.get("flow") and u.get("flow", {}).get("step") in ("key", "secret") for u in users.values()):
+            log(f"[CYCLE:{reason}] تأجيل الدورة مؤقتاً لإعطاء الأولوية لربط مفتاح Binance")
+            return ENGINE_RES
+
         t0 = time.time()
         now_cycle = datetime.now(timezone.utc)
         try:
@@ -1198,6 +1205,7 @@ def run_cycle(reason: str = "scheduled"):
         LAST_CYCLE_SECS = time.time() - t0
         st["last_cycle_secs"] = round(LAST_CYCLE_SECS, 1)
         save_state()
+        LAST_CYCLE_COMPLETED_AT = time.time()
         
         log(f"[CYCLE:{reason}] اكتملت في {LAST_CYCLE_SECS:.1f}ث — شراء جديد: {len(LATEST_PLANS)} | بيع: {len(LATEST_SELL_PLANS)} | صفقات مفتوحة: {len(LATEST_OPEN_POSITIONS)}")
         trigger_immediate_live_refresh()
@@ -2090,11 +2098,13 @@ def handle_callback(cb: dict):
     try:
         unregister_live_viewer(chat_id)
         if data == "nav:more":
-            # تحديث شامل وفوري لكل شيء عند الضغط على فتح لوحة التحكم
+            # تحديث فوري وشامل لبيانات لوحة التحكم مع حماية ضد إرهاق السيرفر
             try:
                 cleanup_stale_and_delisted_positions()
                 _quick_update_open_positions_prices()
-                if not CYCLE_LOCK.locked():
+                now_t = time.time()
+                # لا نبدأ دورة بيانات ثقيلة إذا اكتملت دورة فحص قبل أقل من 60 ثانية تفادياً لكثرة الطلبات (-1003)
+                if not CYCLE_LOCK.locked() and (now_t - globals().get("LAST_CYCLE_COMPLETED_AT", 0)) > 60:
                     threading.Thread(target=run_cycle, args=("panel_open",), daemon=True).start()
             except Exception as _e:
                 log(f"[PANEL REFRESH] {_e}")
