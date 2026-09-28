@@ -45,6 +45,8 @@ class LiveExecutor:
 
     def connect(self,uid,key,secret,capital,max_order,use_full_balance=False):
         with self.lock:
+            key = (key or "").strip()
+            secret = (secret or "").strip()
             if not (len(key)>=16 and len(secret)>=16 and len(key)<=256 and len(secret)<=256):raise ValueError('صيغة المفتاح غير صحيحة')
             # v240: السماح بـ capital=0 يعني كامل الرصيد تراكمي
             capital_f=float(capital)

@@ -1,6 +1,6 @@
 """Small allowlisted Binance Spot REST client. Never logs URLs/keys/signatures.
 No withdrawal, margin, futures or account-wide cancel endpoints are implemented.
-v243 — Robust Direct Verification + Zero Artificial Lockouts
+v244 — Accurate Diagnostics + Real IP Extraction + Zero Space Glitches
 """
 import hashlib
 import hmac
@@ -31,10 +31,22 @@ BINANCE_LIVE_MIRRORS = [
     'https://api3.binance.com'
 ]
 
+def get_server_ip():
+    for url in ('https://api.ipify.org', 'https://checkip.amazonaws.com', 'https://ifconfig.me/ip'):
+        try:
+            r = requests.get(url, timeout=2)
+            if r.status_code == 200 and r.text.strip():
+                return r.text.strip()
+        except Exception:
+            pass
+    return 'غير متوفر'
+
 class BinanceSpot:
     def __init__(self, key, secret, venue='live', session=None):
         if venue not in ('live','testnet'): raise ValueError('Unknown venue')
-        self.key, self.secret, self.venue = key, secret, venue
+        self.key = (key or '').strip()
+        self.secret = (secret or '').strip()
+        self.venue = venue
         if venue == 'live':
             self.bases = list(BINANCE_LIVE_MIRRORS)
         else:
@@ -87,7 +99,6 @@ class BinanceSpot:
         p = dict(params or {})
         if signed:
             if not self.key or not self.secret: raise ValueError('Missing credentials')
-            # استخدام توقيت محلي مع recvWindow واسع (60 ثانية) لتفادي أي مشكلة فروق توقيت
             now_ms = int(time.time() * 1000) + self.offset
             p.update(timestamp=now_ms, recvWindow=60000)
 
@@ -100,7 +111,6 @@ class BinanceSpot:
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
         last_err = None
-        # تجربة الاتصال عبر المرايا المتاحة
         for i in range(len(self.bases)):
             mirror = self.bases[(self.base_idx + i) % len(self.bases)]
             try:
@@ -153,7 +163,7 @@ class BinanceSpot:
                 last_err = ExchangeError(f'-1003 ({msg or "Too many requests"})', True)
                 continue
 
-            # أخطاء مفاتيح صريحة
+            # أخطاء أخرى: يتم رفع الخطأ الدقيق من بايننس
             raise ExchangeError(f'{code} ({msg})', resp.status_code >= 500 or code in (-1000, -1006, -1007))
 
         if last_err:
@@ -161,8 +171,7 @@ class BinanceSpot:
         raise ExchangeError('NO_RESPONSE', True)
 
     def verify(self):
-        """فحص مباشر وصارم لمفتاح وتصاريح الحساب"""
-        # 1. التحقق من صلاحية الحساب عبر /api/v3/account
+        """فحص دقيق لمفتاح Binance مع تشخيص ذكي وشامل لأي سبب رفض"""
         last_exc = None
         a = None
         for attempt in range(3):
@@ -173,9 +182,39 @@ class BinanceSpot:
             except Exception as e:
                 last_exc = e
                 err_s = str(e)
-                # إذا كانت المفاتيح غير صالحة صراحة:
-                if any(bad in err_s for bad in ('-2014', '-2015', 'API-key', 'IP')):
-                    raise ValueError('مفتاح API أو Secret غير صحيح، أو تم تقييد الـ IP في Binance.')
+                # فحص الأخطاء التشخيصية لبايننس بدقة
+                if any(bad in err_s for bad in ('-2015', '-2014', '-1022')):
+                    srv_ip = None
+                    if 'request ip:' in err_s:
+                        try:
+                            srv_ip = err_s.split('request ip:')[1].split(')')[0].strip()
+                        except Exception:
+                            pass
+                    if not srv_ip:
+                        srv_ip = get_server_ip()
+
+                    if '-2014' in err_s:
+                        raise ValueError('❌ صيغة API Key غير صحيحة — تأكد من نسخه بالكامل بدون مسافات زائدة.')
+                    elif '-1022' in err_s:
+                        raise ValueError('❌ API Secret غير مطابق للـ Key — تأكد من نسخ السر الخاص بهذا المفتاح بدقة.')
+                    else:
+                        msg = (
+                            '❌ <b>رفضت Binance الاتصال (كود -2015):</b>\n'
+                            'المفتاح ينقصه تفعيل الصلاحيات أو محظور بقيود الـ IP في حسابك.\n\n'
+                            f'🌐 <b>عنوان IP السيرفر هو:</b> <code>{srv_ip}</code>\n\n'
+                            '🛠️ <b>حل المشكلة في دقيقة واحدة داخل Binance:</b>\n'
+                            '1️⃣ ادخل لموقع/تطبيق <b>Binance > API Management</b> واضغط <b>Edit</b> على المفتاح.\n'
+                            '2️⃣ في قسم قيود الـ IP (IP access restriction):\n'
+                            '   • اختر <b>(Unrestricted / غير مقيد)</b> — أسهل خيار ليعمل فوراً.\n'
+                            f'   • أو اختر (تقييد الوصول لـ IP) وأضف هذا العنوان: <code>{srv_ip}</code>\n'
+                            '3️⃣ في الصلاحيات (API Restrictions) ضع علامة صح ✅ على:\n'
+                            '   • <b>Enable Reading</b>\n'
+                            '   • <b>Enable Spot & Margin Trading</b> (ضرورية جداً للتداول الفوري)\n'
+                            '   • ⚠️ <i>تأكد أن Enable Withdrawals غير مفعلة</i>\n'
+                            '4️⃣ اضغط <b>Save</b> ثم أعد إدخال المفتاح في البوت.'
+                        )
+                        raise ValueError(msg)
+
                 if '-1003' in err_s or '429' in err_s or 'NETWORK' in err_s:
                     time.sleep(1.5 * (attempt + 1))
                     continue
@@ -188,7 +227,7 @@ class BinanceSpot:
         if not a.get('canTrade'):
             raise ValueError('الحساب لا يسمح بالتداول الفوري (Spot)')
 
-        # 2. فحص الصلاحيات الإضافية في live
+        # فحص الصلاحيات الإضافية في live (اختياري لا يوقف الربط إذا كان Spot مفعل)
         if self.venue == 'live':
             try:
                 p = self.request('GET', '/sapi/v1/account/apiRestrictions')
@@ -203,7 +242,6 @@ class BinanceSpot:
             except ValueError:
                 raise
             except Exception:
-                # إذا تعذر فحص sapi بسبب كثرة طلبات أو قيود sapi، لا نوقف الربط طالما canTrade مؤكد
                 pass
 
         return a
