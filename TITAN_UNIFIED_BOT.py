@@ -60,6 +60,14 @@ GOLDEN_ASSETS = GS_ENGINE.GOLDEN_APPROVED_COINS if HAS_UNIFIED else []
 TITAN_ASSETS = ['SOL','FET','DOT','XRP','BNB','ETH','XLM','HBAR','TRX','LINK','ADA','LTC','DOGE','ARB','BCH','ETC','EOS','ZEC','BTC','AVAX']
 ALL_DATA_ASSETS = list(set([a+"USDT" if not a.endswith("USDT") else a for a in GOLDEN_ASSETS + TITAN_ASSETS] + ["BTCUSDT"]))
 
+# قائمة العملات المتوقفة أو الملغاة من Binance Spot (تمنع تماماً من توليد أي صفقات حية)
+DELISTED_OR_INACTIVE = {
+    "PLAUSDT", "WTCUSDT", "GTOUSDT", "DNTUSDT", "GXSUSDT", "TCTUSDT", 
+    "REEFUSDT", "IRISUSDT", "MATICUSDT", "RNDRUSDT", "OCEANUSDT", "FTMUSDT", 
+    "DARUSDT", "STPTUSDT", "ELFUSDT", "EOSUSDT", "LRCUSDT", "COSUSDT", 
+    "DENTUSDT", "STORJUSDT", "ARDRUSDT", "PLA", "WTC", "GTO", "DNT", "GXS", "TCT", "REEF"
+}
+
 SIGNAL_BOT_VERSION = "بوت التداول الذكي"
 BOT_VERSION = "النسخة العصرية"
 STRATEGY_ID = "simple-dual-1m-5m"
@@ -453,13 +461,32 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
             break
         if sym not in store:
             continue
+            
+        # 1. استبعاد العملات المتوقفة أو الملغاة تماماً لمنع أي صفقات قديمة (مثل PLA)
+        if sym in DELISTED_OR_INACTIVE or sym.replace("USDT", "") in DELISTED_OR_INACTIVE:
+            continue
+            
+        df = store[sym]
+        min_bars = 40
+        if len(df) < min_bars:
+            continue
+            
+        # 2. شرط الجدة والحداثة الصارم: يجب أن تكون آخر شمعة حية ولحظية (أقل من ساعتين)
+        # ولا يجوز أبداً فتح صفقات حية على شموع تاريخية قديمة
+        try:
+            last_ts = df.index[-1]
+            last_dt = pd.to_datetime(last_ts)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.tz_localize(timezone.utc)
+            else:
+                last_dt = last_dt.tz_convert(timezone.utc)
+            if (now - last_dt).total_seconds() > 2.0 * 3600:
+                continue
+        except Exception:
+            pass
+            
         checked += 1
         try:
-            df = store[sym]
-            min_bars = 40
-            if len(df) < min_bars:
-                continue
-                
             # إعداد بيانات 1h لحساب ATR
             try:
                 df1h = df.resample("1h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
@@ -734,9 +761,70 @@ def filter_new_buy_signals(plans: list) -> tuple:
 
 # === نظام الحافظة الورقية وتتبع الصفقات والبيع والأرباح الحالية ===
 
-def get_open_positions():
-    """جلب الصفقات المفتوحة من STATE"""
+
+def cleanup_stale_and_delisted_positions():
+    """تنظيف فوري للصفقات القديمة أو المتوقفة مثل PLA واسترجاع رصيد الكاش"""
     try:
+        st = load_state()
+        positions = st.get("open_positions", [])
+        if not positions:
+            return
+            
+        now = datetime.now(timezone.utc)
+        valid_positions = []
+        removed_count = 0
+        refund_cash = 0.0
+        
+        for pos in positions:
+            ticker = pos.get("ticker", "")
+            sym_clean = ticker.replace("USDT", "")
+            entry_str = pos.get("entry_time", "")
+            is_stale = False
+            
+            # 1. العملات الملغاة أو المتوقفة (مثل PLA)
+            if ticker in DELISTED_OR_INACTIVE or sym_clean in DELISTED_OR_INACTIVE:
+                is_stale = True
+                
+            # 2. الصفقات التي تجاوزت 5 ساعات (قاعدة V5 Ultra القصوى للاحتفاظ)
+            if entry_str:
+                try:
+                    entry_dt = datetime.fromisoformat(entry_str)
+                    if entry_dt.tzinfo is None:
+                        entry_dt = entry_dt.tz_localize(timezone.utc)
+                    if (now - entry_dt).total_seconds() > 5 * 3600:
+                        is_stale = True
+                except Exception:
+                    pass
+                    
+            if is_stale:
+                removed_count += 1
+                cost = float(pos.get("cost_usd", 40.0))
+                refund_cash += cost
+                log(f"[CLEANUP] إزالة صفقة قديمة/ملغاة نهائياً: {ticker} (#{pos.get('position_number')})")
+            else:
+                valid_positions.append(pos)
+                
+        if removed_count > 0:
+            st["open_positions"] = valid_positions
+            paper = st.get("paper", {})
+            if paper:
+                cur_cash = float(paper.get("cash", PAPER_CAPITAL))
+                paper["cash"] = round(min(PAPER_CAPITAL, cur_cash + refund_cash), 2)
+            for uid_str, u in st.get("users", {}).items():
+                u_paper = u.get("paper", {})
+                u_positions = u_paper.get("positions", {})
+                for pid, p in list(u_positions.items()):
+                    if p.get("ticker") in DELISTED_OR_INACTIVE or p.get("ticker","").replace("USDT","") in ["PLA","WTC","GTO"]:
+                        u_positions.pop(pid, None)
+            save_state()
+            log(f"[CLEANUP] ✅ تم تنظيف {removed_count} صفقات قديمة/ملغاة واسترجاع {refund_cash}$ للكاش")
+    except Exception as e:
+        log(f"[CLEANUP ERROR] {e}")
+
+def get_open_positions():
+    """جلب الصفقات المفتوحة من STATE مع تنظيف الصفقات القديمة/الملغاة"""
+    try:
+        cleanup_stale_and_delisted_positions()
         st = load_state()
         return st.get("open_positions", [])
     except Exception:
@@ -1074,6 +1162,9 @@ def run_cycle(reason: str = "scheduled"):
             log(f"[CYCLE] فشل جلب البيانات: {e}")
             return ENGINE_RES
             
+        # 0. تنظيف الصفقات القديمة أو المتوقفة (مثل PLA) فوراً
+        cleanup_stale_and_delisted_positions()
+        
         # 1. تحديث أسعار السوق اللحظية والأرباح الحالية لكل الصفقات المفتوحة أولاً!
         update_open_positions_market_data(store, now_cycle)
         
@@ -2361,6 +2452,7 @@ def main():
     log(f"[BOOT] متصل بتلغرام كـ @{me.get('username')}")
     tg("deleteWebhook", drop_pending_updates=False)
     st = load_state()
+    cleanup_stale_and_delisted_positions()
     if ADMIN_CHAT_ID and not st.get("admin_chat_id"):
         st["admin_chat_id"] = ADMIN_CHAT_ID
         save_state()
