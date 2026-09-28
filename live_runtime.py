@@ -257,10 +257,7 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                     u['flow']=None
                     B.save_state()
                     raw=str(e)
-                    if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                        err='⏳ Binance مشغول حالياً (كثرة الطلبات -1003)\n\n• السبب: السيرفر يرسل كثير طلبات بيانات السوق + طلب التحقق في نفس اللحظة\n• الحل: انتظر دقيقة واحدة ثم أعد المحاولة\n• تأكد أيضاً:\n  - المفتاح Spot فقط بلا سحب\n  - IP الخادم مضاف في قائمة IP المسموحة (إن كنت مفعل IP Restriction)\n  - أو عطّل IP Restriction مؤقتاً للتجربة\n\nسيتم حل المشكلة تلقائياً بعد دقيقة.'
-                    else:
-                        err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
+                    err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                     B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
                 return True
             else:
@@ -329,10 +326,7 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                 u['flow']=None
                 B.save_state()
                 raw=str(e)
-                if '-1003' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw:
-                    err='⏳ Binance مشغول (كثرة الطلبات -1003) — انتظر دقيقة وأعد المحاولة.\n• أضف IP الخادم في whitelist أو عطّل IP Restriction مؤقتاً.'
-                else:
-                    err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
+                err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                 B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
             return True
 
@@ -457,9 +451,10 @@ def callback(cb,u):
             EXEC.disconnect(uid);B.respond_cb(cb,'🗑️ حُذف الربط بعد التأكد من عدم وجود مراكز نشطة.',keyboard(u))
         elif data=='api:bal':
             bals=EXEC.client(account(uid)).balances()
-            text='💼 <b>الأرصدة الحرة على Binance</b>\n'+'\n'.join(f'{B.esc(s)}: {q}' for s,q in bals.items() if q>0)
+            pos_text = '\n'.join(f'{B.esc(s)}: {q}' for s,q in bals.items() if q>0)
+            text = '💼 <b>الأرصدة الحرة على Binance</b>\n' + (pos_text if pos_text else '• لا توجد أرصدة حرة تفوق الصفر حالياً.')
             try:
-                total_eq, free, used = EXEC.get_total_equity(account(uid), EXEC.client(account(uid)))
+                total_eq, free, used = EXEC.get_total_equity(account(uid), EXEC.client(account(uid)), cached_bals=bals)
                 text+=f'\n\n📊 إجمالي تراكمي: {total_eq:.2f} USDT | حر: {free:.2f} | مستخدم: {used:.2f}'
             except:
                 pass

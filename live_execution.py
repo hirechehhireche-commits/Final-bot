@@ -29,10 +29,13 @@ class LiveExecutor:
 
     def active(self,a):return [p for p in a['positions'].values() if p['state'] not in ('CLOSED','SKIPPED')]
 
-    def get_total_equity(self, a, client):
+    def get_total_equity(self, a, client, cached_bals=None):
         """حساب إجمالي الرصيد التراكمي — الرصيد الحر + قيمة المراكز المفتوحة"""
         try:
-            free_usdt = client.balances().get('USDT', D(0))
+            if cached_bals is not None and isinstance(cached_bals, dict):
+                free_usdt = cached_bals.get('USDT', D(0))
+            else:
+                free_usdt = client.balances().get('USDT', D(0))
         except:
             free_usdt = D(0)
         used = sum(D(p['budget']) for p in self.active(a))
