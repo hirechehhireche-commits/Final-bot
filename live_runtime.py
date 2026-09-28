@@ -208,12 +208,11 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
 
     try:
         if step=='key':
-            key = txt.strip()
-            if not (16<=len(key)<=256):
+            if not (16<=len(txt)<=256):
                 B.send_msg(uid,'⚠️ طول المفتاح غير صحيح (16-256). أعد الإرسال أو /cancel')
                 return True
             # احفظ Key مؤقتاً
-            flow['key']=key
+            flow['key']=txt
             flow['step']='secret'
             flow['started']=time.time()
             B.save_state()
@@ -230,11 +229,11 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
             return True
 
         elif step=='secret':
-            secret = txt.strip()
-            if not (16<=len(secret)<=256):
+            if not (16<=len(txt)<=256):
                 B.send_msg(uid,'⚠️ طول Secret غير صحيح. أعد الإرسال أو /cancel')
                 return True
-            key = flow.get('key','').strip()
+            secret=txt
+            key=flow.get('key','')
             full_mode=flow.get('full_mode',True)
             # حذف رسالة Secret فوراً
             try:
@@ -262,16 +261,16 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                     raw=str(e)
                     if B and hasattr(B, 'log'):
                         B.log(f'[CONNECT_ERROR] raw: {raw}')
-                    if isinstance(e, ValueError):
-                        err = str(e)
-                    elif '-1003' in raw or '429' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw or 'Too many requests' in raw:
+                    if '-1003' in raw or '429' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw or 'Too many requests' in raw:
                         err=('⏳ <b>عنوان IP السيرفر عليه ضغط مؤقت في Binance (-1003)</b>\n\n'
                              '• بايننس يفرض حظراً مؤقتاً لمدة 60 ثانية عند كثرة الطلبات من نفس الـ IP.\n'
                              '• <b>تم إيقاف استعلامات السوق تلقائياً لتفريغ الكوتا بالكامل.</b>\n'
                              '• 🕒 <b>يرجى الانتظار دقيقة واحدة فقط (60 ثانية) دون إرسال طلبات</b>، ثم اضغط (ربط binance) وسيتم الربط فوراً بنجاح.\n\n'
                              '💡 <i>تأكد أيضاً:</i> اختيار (Unrestricted) في إعدادات IP بالمفتاح في Binance.')
+                    elif any(bad in raw for bad in ('-2014', '-2015', 'API-key', 'المفتاح', 'credentials')):
+                        err='❌ مفتاح API أو Secret غير صحيح، أو تم تقييد الـ IP في إعدادات Binance.\n• تأكد من نسخ المفتاح والسر بدقة\n• تأكد من تفعيل صلاحية Spot Trading بدون سحب\n• في إعدادات المفتاح في Binance اختر (Unrestricted) لتقييد IP أو أضف IP السيرفر.'
                     else:
-                        err=str(e) if isinstance(e,(RuntimeError,)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
+                        err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                     B.send_msg(uid,'⚠️ فشل الربط:\n'+err, keyboard(u))
                 return True
             else:
@@ -344,16 +343,16 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                 raw=str(e)
                 if B and hasattr(B, 'log'):
                     B.log(f'[CONNECT_ERROR] raw: {raw}')
-                if isinstance(e, ValueError):
-                    err = str(e)
-                elif '-1003' in raw or '429' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw or 'Too many requests' in raw:
+                if '-1003' in raw or '429' in raw or 'كثرة الطلبات' in raw or 'RATE_LIMIT' in raw or 'Too many requests' in raw:
                     err=('⏳ <b>عنوان IP السيرفر عليه ضغط مؤقت في Binance (-1003)</b>\n\n'
                          '• بايننس يفرض حظراً مؤقتاً لمدة 60 ثانية عند كثرة الطلبات من نفس الـ IP.\n'
                          '• <b>تم إيقاف استعلامات السوق تلقائياً لتفريغ الكوتا بالكامل.</b>\n'
                          '• 🕒 <b>يرجى الانتظار دقيقة واحدة فقط (60 ثانية) دون إرسال طلبات</b>، ثم اضغط (ربط binance) وسيتم الربط فوراً بنجاح.\n\n'
                          '💡 <i>تأكد أيضاً:</i> اختيار (Unrestricted) في إعدادات IP بالمفتاح في Binance.')
+                elif any(bad in raw for bad in ('-2014', '-2015', 'API-key', 'المفتاح', 'credentials')):
+                    err='❌ مفتاح API أو Secret غير صحيح، أو تم تقييد الـ IP في إعدادات Binance.\n• تأكد من نسخ المفتاح والسر بدقة\n• تأكد من تفعيل صلاحية Spot Trading بدون سحب\n• في إعدادات المفتاح في Binance اختر (Unrestricted) لتقييد IP أو أضف IP السيرفر.'
                 else:
-                    err=str(e) if isinstance(e,(RuntimeError,)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
+                    err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
                 B.send_msg(uid,'⚠️ فشل الربط:\n'+err, keyboard(u))
             return True
 
