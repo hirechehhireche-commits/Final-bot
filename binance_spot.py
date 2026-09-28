@@ -229,4 +229,3 @@ class BinanceSpot:
         rate = D(fee_rate) if bnb_discount else D(0.001)
         fee = notional * rate
         return fee
-EOF
