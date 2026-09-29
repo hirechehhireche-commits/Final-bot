@@ -179,7 +179,7 @@ POOL1_PARAMS.update({
     'pyr_alloc': 0.12,
     'pyr_trigger': 4.33,
     'rec_bars': 104.0,
-    'rec_boost': 1.59,
+    'rec_boost': 1.58,
     'risk_off_mult': 1.0,
     'risk_pct': 0.035,
     'rs_rank_gate': 0.12,
@@ -191,7 +191,7 @@ POOL1_PARAMS.update({
     'sl_atr_mult': 1.895,
     'slope_lag': 4.0,
     't1_atr_mult': 5.59,
-    't1_frac': 0.134,
+    't1_frac': 0.130,
     't1_gain_lock': 0.0,
     't2_atr_mult': 10.1,
     't2_frac_of_rest': 0.1,
@@ -213,7 +213,7 @@ POOL2_PARAMS.update({
     'ema_p': 21.0,
     'max_risk': 3.0,
     'max_total': 3.0,
-    'min_confluence': 0.22,
+    'min_confluence': 0.215,
     'prox': 0.015,
     'rec_bars': 48.0,
     'rec_boost': 1.3,
@@ -250,7 +250,7 @@ POOL3_PARAMS.update({
     'max_risk': 2.0,
     'max_total': 2.0,
     'min_alpha_gap': 0.1,
-    'min_confluence': 0.58,
+    'min_confluence': 0.585,
     'mode': 'trend',
     'prox': 0.03,
     'rec_bars': 48.0,
@@ -264,7 +264,7 @@ POOL3_PARAMS.update({
     'rsi_trig': 48.0,
     'sl_atr_mult': 1.8,
     'slope_lag': 4.0,
-    't1_atr_mult': 5.07,
+    't1_atr_mult': 5.10,
     't1_frac': 0.15,
     't1_gain_lock': 0.0,
     't2_atr_mult': 9.6,
@@ -287,7 +287,7 @@ UNIFIED_PARAMS.update({
     "max_risk": 3, "max_total": 3,
 })  # [v99-U] risk 0.02 + فلتر BTC + وقف 1.8 (IS ‏+235.6/DD ‏14.3/n ‏132)
 
-POOL_BUDGETS = [87.80, 4.20, 8.00]  # [Gen 15000 Omni Transcendence] توزيع الميزانيات المحسن المعتمد
+POOL_BUDGETS = [88.50, 3.50, 8.00]  # [Gen 20000 Quantum Omnipotence] توزيع الميزانيات المحسن المعتمد
 
 # ══════════════════════════════════════════════════════════════════════════════
 # معاملات الاستراتيجية الثانية (متابعة الاتجاه الانتقائية — 11 عملاً)
@@ -295,7 +295,7 @@ POOL_BUDGETS = [87.80, 4.20, 8.00]  # [Gen 15000 Omni Transcendence] توزيع 
 STRATEGY2_PARAMS = dict(BASELINE_PARAMS)
 STRATEGY2_PARAMS.update({
     'alpha_weights': [0.55, 0.3, 0.15],
-    'asset_params': {'BCHUSDT': {'mode': 'floor', 'min_confluence': 0.58, 'fl_rsi_dip': 32.0, 'fl_rsi_up': 26.0, 'roc_free': True, 'btc_free': True}},
+    'asset_params': {'BCHUSDT': {'mode': 'floor', 'min_confluence': 0.585, 'fl_rsi_dip': 32.0, 'fl_rsi_up': 26.0, 'roc_free': True, 'btc_free': True}},
     'bear_gmri': 0.36,
     'bear_persist': 12.0,
     'boost': 1.4,
@@ -307,7 +307,7 @@ STRATEGY2_PARAMS.update({
     'ema_p': 21.0,
     'max_risk': 1.0,
     'max_total': 1.0,
-    'min_confluence': 0.58,
+    'min_confluence': 0.585,
     'mode': 'trend',
     'mom_gate': {'mode': 'rank', 'theta': 0.075},
     'prox': 0.03,

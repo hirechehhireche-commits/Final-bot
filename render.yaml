@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: titan-juggernaut-bot
+    runtime: python
+    plan: free
+    numInstances: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: python TITAN_UNIFIED_BOT.py
+    healthCheckPath: /ping
+    autoDeployTrigger: 'off'
+    disk:
+      name: titan-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: '3.11.11'
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: TITAN_PRIVATE
+        value: '1'
+      - key: TITAN_STATE_FILE
+        value: /var/data/bot_state.json
