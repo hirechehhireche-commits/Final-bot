@@ -1440,6 +1440,79 @@ def refresh_open_positions_live_and_guard(send_alerts: bool = True) -> list:
             return []
         return []
 
+
+# =====================================================================
+# 🛡️ رسالة الطمأنينة التلقائية بعد 24 ساعة من هدوء السوق
+# =====================================================================
+REASSURANCE_TEXT = (
+    "🛡️ <b>رسالة طمأنينة | حالة السوق والمحرك</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "مرت 24 ساعة دون صدور إشارات دخول جديدة، ونود طمأنتكم:\n\n"
+    "✅ <b>البوت يعمل بكامل كفاءته 24/7:</b>\n"
+    "المحركات تفحص حركة الأسعار والسيولة والزخم لحظياً دون أي توقف.\n\n"
+    "⚖️ <b>طبيعة حركة السوق الحالية:</b>\n"
+    "السوق يمر بمرحلة تذبذب عرضي أو ركود لم تكتمل فيها شروط الاتجاه الصاعد المؤكدة.\n\n"
+    "💎 <b>فلسفة الأمان وحماية رأس المال:</b>\n"
+    "البوت مبرمج كـ 'قناص' يرفض الدخول العشوائي لحماية محفظتك من مصائد الهبوط وعمولات المنصة غير المبررة.\n\n"
+    "🎯 <b>الجاهزية لاقتناص الفرص:</b>\n"
+    "فور اكتمال شروط الانفجار السعري الصاعد في أي عملة، ستصلكم إشارة الدخول فوراً.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "💡 <i>«الانضباط والصبر في التداول هما أساس الأرباح المستدامة.. رأس مالكم في أمان تام.»</i>"
+)
+
+def check_and_send_reassurance_message(force: bool = False):
+    """فحص وإرسال رسالة طمأنينة للمستخدمين إذا مرت 24 ساعة دون أي صفقات جديدة"""
+    try:
+        st = load_state()
+        now_ts = time.time()
+        
+        last_deal_ts = st.get("last_deal_opened_at")
+        if not last_deal_ts:
+            positions = st.get("open_positions", [])
+            closed = st.get("paper", {}).get("closed_deals", [])
+            latest_time_str = None
+            if positions:
+                latest_time_str = positions[-1].get("entry_time")
+            elif closed:
+                latest_time_str = closed[-1].get("entry_time")
+                
+            if latest_time_str:
+                try:
+                    dt = datetime.fromisoformat(str(latest_time_str).replace("Z", "+00:00"))
+                    last_deal_ts = dt.timestamp()
+                except Exception:
+                    last_deal_ts = now_ts
+            else:
+                last_deal_ts = st.get("bot_started_at", now_ts)
+            st["last_deal_opened_at"] = last_deal_ts
+
+        last_sent_ts = float(st.get("last_reassurance_sent_at", 0.0) or 0.0)
+        hours_since_deal = (now_ts - float(last_deal_ts)) / 3600.0
+        hours_since_sent = (now_ts - last_sent_ts) / 3600.0 if last_sent_ts > 0 else 999.0
+        
+        # إذا مرت 24 ساعة منذ آخر صفقة و24 ساعة منذ آخر رسالة طمأنينة (أو بالإجبار)
+        if force or (hours_since_deal >= 24.0 and hours_since_sent >= 24.0):
+            sent_count = 0
+            users = st.get("users", {})
+            for uid_str, user in list(users.items()):
+                if not isinstance(user, dict):
+                    continue
+                if not user.get("settings", {}).get("signals", True):
+                    continue
+                if not is_allowed(int(uid_str), user.get("username")):
+                    continue
+                try:
+                    send_msg(int(uid_str), REASSURANCE_TEXT, more_kb())
+                    sent_count += 1
+                except Exception as e:
+                    log(f"[REASSURANCE SEND ERROR] {uid_str}: {e}")
+                    
+            st["last_reassurance_sent_at"] = now_ts
+            save_state()
+            log(f"[REASSURANCE] 🛡️ تم إرسال رسالة الطمأنينة لـ {sent_count} مستخدم بعد مرور {hours_since_deal:.1f} ساعة هدوء")
+    except Exception as e:
+        log(f"[REASSURANCE ERROR] {e}")
+
 def run_cycle(reason: str = "scheduled"):
     BREAKER.heartbeat("run_cycle")
     global ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS, LATEST_SELL_PLANS, LATEST_OPEN_POSITIONS, LAST_CYCLE_COMPLETED_AT
@@ -1523,6 +1596,10 @@ def run_cycle(reason: str = "scheduled"):
         all_positions = get_open_positions()
         LATEST_OPEN_POSITIONS = [p for p in all_positions if p.get("status") == "OPEN"]
         
+        if new_buy_plans:
+            st["last_deal_opened_at"] = time.time()
+            st["last_reassurance_sent_at"] = 0.0
+
         save_fingerprints()
         LAST_CYCLE_SECS = time.time() - t0
         st["last_cycle_secs"] = round(LAST_CYCLE_SECS, 1)
@@ -1546,6 +1623,8 @@ def run_cycle(reason: str = "scheduled"):
                 except Exception as e:
                     log(f"[SIGNAL SEND] {uid_str} {e}")
                     
+        # فحص إرسال رسالة الطمأنينة إذا مرت 24 ساعة دون أي صفقات جديدة
+        check_and_send_reassurance_message()
         return res
     finally:
         CYCLE_LOCK.release()
@@ -1578,11 +1657,16 @@ def guard_tick():
     refresh_open_positions_live_and_guard(send_alerts=True)
 
 def watch_loop():
-    """حلقة مراقبة وحراسة مستمرة 24/7 — تفحص أسعار الصفقات المفتوحة مباشرة من بايننس وتنفذ الخروج الفوري كل ثانيتين"""
+    """حلقة مراقبة وحراسة مستمرة 24/7 — تفحص أسعار الصفقات المفتوحة مباشرة من بايننس وتنفذ الخروج الفوري كل ثانيتين وتفحص رسالة الطمأنينة"""
+    last_reassurance_check = 0.0
     while True:
         time.sleep(2.0)
         try:
             refresh_open_positions_live_and_guard(send_alerts=True)
+            # فحص الطمأنينة كل 5 دقائق
+            if time.time() - last_reassurance_check > 300.0:
+                last_reassurance_check = time.time()
+                check_and_send_reassurance_message()
         except Exception as e:
             log(f"[WATCH ERROR] {e}")
 
@@ -2094,6 +2178,8 @@ def handle_text_message(msg: dict):
         handle_start(chat_id, chat.get("first_name",""), chat.get("username",""))
     elif low.startswith("/about"):
         send_msg(chat_id, ABOUT_TEXT, api_back_kb())
+    elif low.startswith("/reassurance"):
+        send_msg(chat_id, REASSURANCE_TEXT, api_back_kb())
     elif low.startswith("/testsignal"):
         # إرسال إشارة تجريبية للتأكد أن البوت يرسل
         try:
