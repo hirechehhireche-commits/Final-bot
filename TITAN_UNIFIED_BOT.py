@@ -30,6 +30,8 @@ except Exception:
 
 import gate_data
 import live_runtime as LIVE
+from emergency_circuit_breaker import BREAKER
+import engine_1m_scalper as SCALPER_1M
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "").strip()
@@ -510,7 +512,11 @@ ABOUT_TEXT = (
     "• إشارات البيع ترسل للصفقات الحية المفتوحة الجديدة فقط مع ذكر رقم الصفقة ونسبة الربح.\n\n"
     "🔒 <b>الأمان وصلاحيات المشتركين:</b>\n"
     "• البوت يعمل بنظام حماية خاص؛ المشترك الجديد يطلب الوصول بضغطة زر.\n"
-    "• يوافق المشرف بضغطة زر واحدة، ويتم تفعيل البوت فوراً للمشترك الجديد ليتمكن من استخدامه بالكامل.\n"
+    "• يوافق المشرف بضغطة زر واحدة، ويتم تفعيل البوت فوراً للمشترك الجديد ليتمكن من استخدامه بالكامل.\n\n"
+    "⚡ <b>استراتيجية السكالبينغ (1 دقيقة):</b>\n"
+    "• محرك مدمج يقتنص فرص الانفجار السعري السريع (Volume Surge >= 1.8x) بأهداف محكمة وخروج زمني محمي.\n\n"
+    "🛡️ <b>صمام الإنقاذ التلقائي (Circuit Breaker):</b>\n"
+    "• نظام حماية حديدي للحساب الحقيقي والورقي يوقف التداول تلقائياً لحماية المحفظة عند أي تراجع يومي مفاجئ.\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
     "💡 اضغط على 🏠 الرئيسية للعودة للوحة التحكم"
 )
@@ -672,6 +678,18 @@ def run_unified_engine(dual_or_single_store: dict):
         total_checked += chk5
         total_enters += ent5
         log(f"[ENGINE:5m] فحص {chk5} عملة — إشارات حقيقية: {ent5}")
+
+    if store_1m:
+        try:
+            plans_1m = SCALPER_1M.run_1m_scalper_batch(store_1m)
+            if plans_1m:
+                best_scalps = plans_1m[:3]  # أفضل 3 صفقات سكالبينغ عالية الزخم
+                entry_plans.extend(best_scalps)
+                total_checked += len(store_1m)
+                total_enters += len(best_scalps)
+                log(f"[ENGINE:1m] ⚡ سكالبينغ 1 دقيقة: رصد {len(plans_1m)} إشارة — اعتمدنا أفضل {len(best_scalps)}")
+        except Exception as e:
+            log(f"[ENGINE:1m ERROR] {e}")
         
     w_golden = 0.82
     return {
@@ -1433,6 +1451,7 @@ def refresh_open_positions_live_and_guard(send_alerts: bool = True) -> list:
         return []
 
 def run_cycle(reason: str = "scheduled"):
+    BREAKER.heartbeat("run_cycle")
     global ENGINE_RES, LAST_CYCLE_SECS, LATEST_PLANS, LATEST_SELL_PLANS, LATEST_OPEN_POSITIONS, LAST_CYCLE_COMPLETED_AT
     if not CYCLE_LOCK.acquire(blocking=False):
         log(f"[CYCLE:{reason}] دورة أخرى قيد التنفيذ")
@@ -1480,6 +1499,13 @@ def run_cycle(reason: str = "scheduled"):
         # 4. فلترة إشارات الشراء بالبصمة الذكية — الجديد فقط!
         raw_buy_plans = res.get("entry_plans", [])
         new_buy_plans, dup_count = filter_new_buy_signals(raw_buy_plans)
+        
+        # 🛡️ فحص صمام الأمان والإنقاذ (Fail-Safe Emergency Breaker)
+        can_trade, breaker_reason = BREAKER.can_open_new_trade()
+        if not can_trade:
+            log(f"[BREAKER INTERVENTION] ⛔ تم كبح الصفقات الجديدة بواسطة صمام الأمان: {breaker_reason}")
+            new_buy_plans = []
+            
         LATEST_PLANS = new_buy_plans
         
         # 5. تدوين وتسجيل الصفقات الجديدة في الحافظة الورقية!
@@ -2286,6 +2312,7 @@ def _quick_update_open_positions_prices():
         pass
 
 def live_auto_refresher_loop():
+    BREAKER.heartbeat("live_auto_refresher")
     """حلقة التحديث اللحظي التلقائي — تعدل الأرقام فقط عند تغيرها بدون وميض الشاشة"""
     while True:
         time.sleep(2.5)

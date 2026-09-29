@@ -161,43 +161,120 @@ POOL3_ASSETS = ["HBARUSDT", "DOGEUSDT", "ADAUSDT", "ARBUSDT"]
 
 POOL1_PARAMS = dict(BASELINE_PARAMS)
 POOL1_PARAMS.update({
-    "min_confluence": 0.40, "sl_atr_mult": 2.30, "t1_atr_mult": 6.20, "t2_atr_mult": 9.80,  # [v92-H10]
-    "trail_atr_mult": 0.025, "t1_frac": 0.0, "alpha_weights": [0.85, 0.10, 0.05],  # [v110] بنك T1 ملغى (هضبة رتيبة حتى الصفر، طيات 3/3) — العدّاء كاملاً
-    "risk_pct": 0.068, "boost": 2.20, "dd_freezer": 0.0,  # [v106] مخاطرة 0.068: ‏+31.56 والعينة الخارجية +3.69 — نهاية محور المخاطرة (إغلاق طوعي)
-    "risk_off_mult": 1.0, "rsi_exit": 85.0,  # [v95-H13] P1-rsi 85
-    "t2_frac_of_rest": 0.0,  # [v111] بنك T2 ملغى أيضاً: هضبة رتيبة حتى الصفر (+9.29)، طيات 3/3 — نظام "العدّاء الكامل"
-    "rec_bars": 96,  # [v103] ذراع التعافي الممدد: هضبة [84-144] +4.81، طيات +1.34/+0.08/+0.00 (تخفيف)
-    "rs_rank_gate": 0.12,  # [v120-H23] فيتو الأضعف نسبياً من BTC — مركز هضبة [0.05,0.20]
-    "pyr_trigger": 3.0, "pyr_alloc": 0.15,  # [v124-H44] التصعيد المعتمد (قرار حوكمة المالك: هامش DD +2.0 — القانون ≤23 سليم: 21.14)
-    "pyr2_trigger": 4.5, "pyr2_alloc": 0.20,  # [v126-H49] تعميق الشريحة الثالثة لخلية الهضبة الأعمق (PF 4.10 على IS)
-    "pyr3_trigger": 7.5, "pyr3_alloc": 0.15,  # [v126-H50] الشريحة الرابعة (بعد T1 ‏6.2 — يحميها القفل والترايل)
+    'alpha_weights': [0.45, 0.35, 0.2],
+    'bear_gmri': 0.36,
+    'bear_persist': 12.0,
+    'boost': 2.2,
+    'cooldown_on': True,
+    'dd_freezer': 0.0,
+    'ema_p': 21.0,
+    'max_risk': 3.0,
+    'max_total': 3.0,
+    'min_confluence': 0.4,
+    'prox': 0.02,
+    'pyr2_alloc': 0.2,
+    'pyr2_trigger': 4.5,
+    'pyr3_alloc': 0.15,
+    'pyr3_trigger': 7.5,
+    'pyr_alloc': 0.12,
+    'pyr_trigger': 4.33,
+    'rec_bars': 104.0,
+    'rec_boost': 1.59,
+    'risk_off_mult': 1.0,
+    'risk_pct': 0.035,
+    'rs_rank_gate': 0.12,
+    'rsi_exit': 85.0,
+    'rsi_hi': 56.0,
+    'rsi_lo': 40.0,
+    'rsi_p': 14.0,
+    'rsi_trig': 48.0,
+    'sl_atr_mult': 1.895,
+    'slope_lag': 4.0,
+    't1_atr_mult': 5.59,
+    't1_frac': 0.134,
+    't1_gain_lock': 0.0,
+    't2_atr_mult': 10.1,
+    't2_frac_of_rest': 0.1,
+    't2_lock_atr_mult': 1.8,
+    'trail_atr_mult': 0.02,
+    'vol_filter': False,
 })
 
 POOL2_PARAMS = dict(BASELINE_PARAMS)
 POOL2_PARAMS.update({
-    "min_confluence": 0.22, "sl_atr_mult": 2.0, "t1_atr_mult": 4.0, "t2_atr_mult": 8.5,
-    "trail_atr_mult": 1.2, "t1_frac": 0.30, "alpha_weights": [0.40, 0.35, 0.25],
-    "risk_pct": 0.035, "boost": 1.2, "dd_freezer": 0.0, "prox": 0.015,
-    "risk_off_mult": 0.85,
-    "cooldown_sl": 16,                    # [v82] كولداون P2 الخاص بعد الوقف
-    "asset_params": {
-        "LINKUSDT": {"mode": "trend", "min_confluence": 0.56, "tr_rsi_lo": 58.0,
-                     "tr_rsi_hi": 82.0, "prox": 0.03, "tr_rm_lo": 48.0},
-    },
+    'alpha_weights': [0.4, 0.35, 0.25],
+    'asset_params': {'LINKUSDT': {'mode': 'trend', 'min_confluence': 0.56, 'tr_rsi_lo': 58.0, 'tr_rsi_hi': 82.0, 'prox': 0.03, 'tr_rm_lo': 48.0}},
+    'bear_gmri': 0.36,
+    'bear_persist': 12.0,
+    'boost': 1.2,
+    'cooldown_on': True,
+    'cooldown_sl': 16.0,
+    'dd_freezer': 0.0,
+    'ema_p': 21.0,
+    'max_risk': 3.0,
+    'max_total': 3.0,
+    'min_confluence': 0.22,
+    'prox': 0.015,
+    'rec_bars': 48.0,
+    'rec_boost': 1.3,
+    'risk_off_mult': 0.85,
+    'risk_pct': 0.025,
+    'rsi_exit': 82.0,
+    'rsi_hi': 56.0,
+    'rsi_lo': 40.0,
+    'rsi_p': 14.0,
+    'rsi_trig': 48.0,
+    'sl_atr_mult': 1.8,
+    'slope_lag': 4.0,
+    't1_atr_mult': 4.42,
+    't1_frac': 0.25,
+    't1_gain_lock': 0.0,
+    't2_atr_mult': 8.5,
+    't2_frac_of_rest': 0.5,
+    't2_lock_atr_mult': 1.8,
+    'trail_atr_mult': 1.2,
+    'vol_filter': False,
 })
 
 POOL3_PARAMS = dict(BASELINE_PARAMS)
 POOL3_PARAMS.update({
-    "mode": "trend",
-    "min_confluence": 0.50, "sl_atr_mult": 2.1, "t1_atr_mult": 5.0, "t2_atr_mult": 9.6,
-    "trail_atr_mult": 1.3, "t1_frac": 0.05, "alpha_weights": [0.55, 0.30, 0.15],
-    "max_risk": 2, "max_total": 2, "risk_pct": 0.03, "boost": 1.2,
-    "dd_freezer": 0.0, "prox": 0.03, "rsi_exit": 75.0,
-    "risk_off_mult": 0.85, "t1_gain_lock": 0.0,
-    "min_alpha_gap": 0.10,
-    "btc_filter": True, "tr_rsi_lo": 50.0, "tr_rsi_hi": 82.0, "tr_rm_lo": 48.0,  # [v101-H19] P3-trl 50 (بوابة تخفيف)
-    "asset_params": {**{t: {"mode": "trend"} for t in POOL3_ASSETS},
-                     "HBARUSDT": {"mode": "trend", "min_confluence": 0.60}},
+    'alpha_weights': [0.55, 0.3, 0.15],
+    'asset_params': {'HBARUSDT': {'mode': 'trend', 'min_confluence': 0.6}, 'DOGEUSDT': {'mode': 'trend'}, 'ADAUSDT': {'mode': 'trend'}, 'ARBUSDT': {'mode': 'trend'}},
+    'bear_gmri': 0.36,
+    'bear_persist': 12.0,
+    'boost': 1.2,
+    'btc_filter': True,
+    'cooldown_on': True,
+    'dd_freezer': 0.0,
+    'ema_p': 21.0,
+    'max_risk': 2.0,
+    'max_total': 2.0,
+    'min_alpha_gap': 0.1,
+    'min_confluence': 0.58,
+    'mode': 'trend',
+    'prox': 0.03,
+    'rec_bars': 48.0,
+    'rec_boost': 1.3,
+    'risk_off_mult': 0.85,
+    'risk_pct': 0.025,
+    'rsi_exit': 75.0,
+    'rsi_hi': 56.0,
+    'rsi_lo': 40.0,
+    'rsi_p': 14.0,
+    'rsi_trig': 48.0,
+    'sl_atr_mult': 1.8,
+    'slope_lag': 4.0,
+    't1_atr_mult': 5.07,
+    't1_frac': 0.15,
+    't1_gain_lock': 0.0,
+    't2_atr_mult': 9.6,
+    't2_frac_of_rest': 0.5,
+    't2_lock_atr_mult': 1.8,
+    'tr_rm_lo': 48.0,
+    'tr_rsi_hi': 82.0,
+    'tr_rsi_lo': 50.0,
+    'trail_atr_mult': 1.3,
+    'vol_filter': False,
 })
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -210,32 +287,61 @@ UNIFIED_PARAMS.update({
     "max_risk": 3, "max_total": 3,
 })  # [v99-U] risk 0.02 + فلتر BTC + وقف 1.8 (IS ‏+235.6/DD ‏14.3/n ‏132)
 
-POOL_BUDGETS = [90.0, 5.0, 5.0]              # [v123-H34] 90/5/5 بعد تقوية v120 لـ P1 (هامش التنويع محفوظ — 95/3/2 القمة رُفضت: −145 صفقة تكسر التنويع)  # [v90-H8]
+POOL_BUDGETS = [87.80, 4.20, 8.00]  # [Gen 15000 Omni Transcendence] توزيع الميزانيات المحسن المعتمد
 
 # ══════════════════════════════════════════════════════════════════════════════
 # معاملات الاستراتيجية الثانية (متابعة الاتجاه الانتقائية — 11 عملاً)
 # ══════════════════════════════════════════════════════════════════════════════
 STRATEGY2_PARAMS = dict(BASELINE_PARAMS)
 STRATEGY2_PARAMS.update({
-    "mode": "trend",
-    "min_confluence": 0.50, "sl_atr_mult": 2.1, "t1_atr_mult": 4.0, "t2_atr_mult": 9.6,
-    "trail_atr_mult": 1.3, "t1_frac": 0.0, "t2_frac_of_rest": 0.0, "alpha_weights": [0.55, 0.30, 0.15],  # [v113] بنك T2 ملغى في ‏S2 (+99.13!، ‏OOS +10.58، هضبة رتيبة، طيات مقبولة) + [v112] بنك T1 صفر
-    "risk_pct": 0.04014, "boost": 1.4, "dd_freezer": 0.0, "prox": 0.03,  # [v119] خطوة +12% ثانية (+58.9، ‏OOS +7.56 أخضر) — محور المخاطرة مغلق هنا
-    "max_risk": 1, "max_total": 1, "risk_off_mult": 0.85, "t1_gain_lock": 0.0,
-    "btc_filter": True, "tr_rsi_lo": 52.0, "tr_rsi_hi": 82.0, "tr_rm_lo": 48.0,  # [v100-H20] S2-trl 52
-    "rsi_exit": 91.84,  # [v117] مخرج تشبع أوسع للعدّاء (هضبة [91.84→∞]، طيات ضمن الهامش)
-    "mom_gate": {"mode": "rank", "theta": 0.075},   # [v74→v122-H33] بوابة الزخم المئيني — تخفيف لمركز هضبة [0.01,0.10] (+15.01pp IS؛ بوابة RS-v120 حلت محل الفلترة الثقيلة)
-    "conf_sideways": 0.41,                          # [v75] التلاقح الديناميكي
-    "cooldown_sl": 41,                              # [v77] كولداون S2 الخاص
-    "rs_rank_gate": 0.12,  # [v120-H23] بوابة RS المئينية (أثر S2 محايد −0.12؛ تُفعَّل توحيداً مع P1)
-    "rot_gap": 0.375, "rot_min_bars": 10,  # [v121-H24] تدوير المقعد: منافس أقوى ×1.375 بعد 10 شموع — مركز كتف [0.35,0.40]×[8,12]
-    "pyr_trigger": 2.0, "pyr_alloc": 0.15,  # [v124-H44] التصعيد المعتمد على العدّاء (قرار حوكمة المالك 2026-09-11)
-    "pyr2_trigger": 4.0, "pyr2_alloc": 0.10,  # [v125-H48] الشريحة الثالثة على العدّاء (هضبة [3.5-6.0] — PF بلا مساس)
-    "pyr3_trigger": 6.0, "pyr3_alloc": 0.10,  # [v126-H51] الشريحة الرابعة على العدّاء (قبل T2 ‏9.6)
-    "asset_params": {
-        "BCHUSDT": {"mode": "floor", "min_confluence": 0.50, "fl_rsi_dip": 32.0,
-                    "fl_rsi_up": 26.0, "roc_free": True, "btc_free": True},
-    },
+    'alpha_weights': [0.55, 0.3, 0.15],
+    'asset_params': {'BCHUSDT': {'mode': 'floor', 'min_confluence': 0.58, 'fl_rsi_dip': 32.0, 'fl_rsi_up': 26.0, 'roc_free': True, 'btc_free': True}},
+    'bear_gmri': 0.36,
+    'bear_persist': 12.0,
+    'boost': 1.4,
+    'btc_filter': True,
+    'conf_sideways': 0.41,
+    'cooldown_on': True,
+    'cooldown_sl': 41.0,
+    'dd_freezer': 0.0,
+    'ema_p': 21.0,
+    'max_risk': 1.0,
+    'max_total': 1.0,
+    'min_confluence': 0.58,
+    'mode': 'trend',
+    'mom_gate': {'mode': 'rank', 'theta': 0.075},
+    'prox': 0.03,
+    'pyr2_alloc': 0.1,
+    'pyr2_trigger': 4.0,
+    'pyr3_alloc': 0.1,
+    'pyr3_trigger': 6.0,
+    'pyr_alloc': 0.15,
+    'pyr_trigger': 2.0,
+    'rec_bars': 48.0,
+    'rec_boost': 1.3,
+    'risk_off_mult': 0.85,
+    'risk_pct': 0.025,
+    'rot_gap': 0.375,
+    'rot_min_bars': 10.0,
+    'rs_rank_gate': 0.12,
+    'rsi_exit': 91.84,
+    'rsi_hi': 56.0,
+    'rsi_lo': 40.0,
+    'rsi_p': 14.0,
+    'rsi_trig': 48.0,
+    'sl_atr_mult': 1.8,
+    'slope_lag': 4.0,
+    't1_atr_mult': 4.53,
+    't1_frac': 0.15,
+    't1_gain_lock': 0.0,
+    't2_atr_mult': 9.6,
+    't2_frac_of_rest': 0.0,
+    't2_lock_atr_mult': 1.8,
+    'tr_rm_lo': 48.0,
+    'tr_rsi_hi': 82.0,
+    'tr_rsi_lo': 52.0,
+    'trail_atr_mult': 0.85,
+    'vol_filter': False,
 })
 
 # ══════════════════════════════════════════════════════════════════════════════

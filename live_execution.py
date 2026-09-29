@@ -126,9 +126,17 @@ class LiveExecutor:
         try:
             response=client.request('POST','/api/v3/order',params)
             self.store.order_result(a['uid'],cid,'ACK',response)
+            try:
+                from emergency_circuit_breaker import BREAKER
+                BREAKER.record_api_success()
+            except: pass
             return response
         except ExchangeError as e:
             self.store.order_result(a['uid'],cid,'UNKNOWN' if e.uncertain else 'REJECTED')
+            try:
+                from emergency_circuit_breaker import BREAKER
+                BREAKER.record_api_error(str(e))
+            except: pass
             raise
 
     def query_known(self,a,client,cid,symbol):
@@ -145,6 +153,12 @@ class LiveExecutor:
             '⚠️ أُوقف فتح صفقات جديدة. '+code+'\nراقب أوامر ومراكز Binance؛ المتابعة تحاول تسوية الأوامر القائمة. لا يوجد ضمان للتنفيذ أثناء تعطل الشبكة.')
 
     def accept_plan(self,uid,plan,now=None):
+        try:
+            from emergency_circuit_breaker import BREAKER
+            can_open, b_reason = BREAKER.can_open_new_trade()
+            if not can_open:
+                return None
+        except: pass
         now=time.time() if now is None else now
         with self.lock:
             a=self.store.account(uid)
