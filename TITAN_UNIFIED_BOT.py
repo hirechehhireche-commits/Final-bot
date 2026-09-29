@@ -11,11 +11,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pandas as pd, requests
 
 try:
+    import titan_juggernaut_bot as T127
+    import bt5y_static as BT5Y
     import golden_split_engine as GS_ENGINE
     HAS_UNIFIED = True
-except Exception:
+    HAS_V127 = True
+except Exception as _e:
+    T127 = None
+    BT5Y = None
     GS_ENGINE = None
     HAS_UNIFIED = False
+    HAS_V127 = False
 
 try:
     import titan_unified_engine as UNI
@@ -2470,6 +2476,20 @@ def handle_callback(cb: dict):
                     txt += "لا يوجد مشتركون إضافيون — البوت خاص بالمشرف فقط.\n"
                 txt += "━━━━━━━━━━━━━━━━━━━━\n💡 عندما يطلب مشترك جديد الانضمام، سيصلك تنبيه مع زر للموافقة المباشرة."
                 send_msg(chat_id, txt, api_back_kb(), msg_id=msg_id)
+        elif data == "bt:csv":
+            try:
+                csv_data = backtest_csv_bytes(ENGINE_RES)
+                if csv_data:
+                    # إرسال ملف CSV
+                    url = f"{TG_API}/sendDocument"
+                    files = {"document": ("titan_v127_5y_backtest.csv", csv_data, "text/csv")}
+                    data_form = {"chat_id": chat_id, "caption": "📄 سجل صفقات باكتست 5 سنوات المعتمد (v127.0.0) — يفتح في Excel."}
+                    requests.post(url, data=data_form, files=files, timeout=15)
+                else:
+                    send_msg(chat_id, "⚠️ لم يتم العثور على ملف CSV.", back_kb(), msg_id=msg_id)
+            except Exception as e:
+                log(f"[CSV SEND] {e}")
+                send_msg(chat_id, f"⚠️ خطأ في إرسال الملف: {e}", back_kb(), msg_id=msg_id)
         elif data.startswith("bt:page:"):
             try:
                 page = int(data.split(":")[-1])

@@ -1,69 +1,13 @@
 {
-  "users": {
-    "8599225300": {
-      "id": 8599225300,
-      "first_name": "",
-      "username": "",
-      "joined": "2026-09-29T01:27:48+00:00",
-      "admin": false,
-      "settings": {
-        "signals": true,
-        "paper": true,
-        "guard": true,
-        "proximity": true
-      },
-      "flow": null,
-      "binance": {
-        "key": null,
-        "secret": null,
-        "verified": false,
-        "can_trade": false,
-        "withdraw_enabled": false,
-        "added_at": null
-      },
-      "mode": "none",
-      "real": {
-        "enabled": false,
-        "capital": 400.0,
-        "risk_scale": 1.0,
-        "confirmed_at": null,
-        "positions": {},
-        "history": [],
-        "kill": false
-      },
-      "paper": {
-        "capital": 400.0,
-        "cash": 400.0,
-        "realized": 0.0,
-        "since": "2026-09-29T01:27:48+00:00",
-        "positions": {},
-        "deals": [],
-        "signals_count": 0,
-        "weeks": {}
-      },
-      "last_weekly": null
-    }
-  },
-  "seen_events": [],
-  "alerted": {},
-  "engine_initialized": false,
-  "last_cycle": null,
-  "last_metrics": null,
-  "admin_chat_id": null,
-  "global_snapshots": {},
-  "allowed": [],
-  "pending": {},
-  "locked_notified": [],
-  "strategy_id": "simple-dual-1m-5m",
-  "buy_fingerprints": {},
-  "sell_fingerprints": {},
+  "users": {},
   "open_positions": [],
-  "sent_signals": {},
   "paper": {
     "initial_capital": 400.0,
     "cash": 400.0,
     "realized_pnl": 0.0,
     "closed_deals": [],
-    "since": "2026-09-29T01:18:27+00:00"
-  }
+    "since": "2026-09-29T12:00:00Z"
+  },
+  "seen_signals": [],
+  "last_cycle": null
 }

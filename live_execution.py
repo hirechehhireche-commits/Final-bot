@@ -280,12 +280,18 @@ class LiveExecutor:
         if p['state'] not in ('OPEN','CLOSING'):return
         qty=D(p['qty']) if fraction>=1 else D(p['qty'])*D(fraction)
         price=c.price(p['symbol'])
-        try:qty=c.quantity(p['symbol'],qty,price,True)
+        try:
+            qty=c.quantity(p['symbol'],qty,price,True)
         except ValueError:
-            self.store.notify(a['uid'],p['id']+':minimum:'+kind,
-                f'⚠️ {p["symbol"]}: بيع {kind} أقل من حدود Binance. لم يُرسل ولم يُعتبر منفذًا؛ راجع حجم المركز.')
-            if fraction>=1:p['state']='MANUAL';self.store.save(a)
-            return
+            try:
+                full_qty=c.quantity(p['symbol'],D(p['qty']),price,True)
+                qty=full_qty
+                fraction=1.0
+            except ValueError:
+                self.store.notify(a['uid'],p['id']+':minimum:'+kind,
+                    f'⚠️ {p["symbol"]}: بيع {kind} أقل من حدود Binance. لم يُرسل ولم يُعتبر منفذًا؛ راجع حجم المركز.')
+                if fraction>=1:p['state']='MANUAL';self.store.save(a)
+                return
         p['exit']={'kind':kind,'fraction':fraction,'quantity':dec(qty),
                    'cid':self.cid(a['uid'],p['id'],'exit:'+kind),'phase':'CANCEL_STOP'}
         p['state']='CLOSING';self.store.save(a)
@@ -383,6 +389,15 @@ class LiveExecutor:
         elif p.get('exit'):
             self._resume_exit(a,c,p)
         elif p['state']=='OPEN':
+            # خروج تلقائي فوري بمجرد كسر سعر السوق للوقف لحماية رأس المال الحقيقي
+            try:
+                curr_p = c.price(p['symbol'])
+                if curr_p <= D(p['stop']):
+                    self._cancel_stop(a, c, p)
+                    self._start_exit(a, c, p, 'SAFETY', 1.0)
+                    return
+            except Exception:
+                pass
             if not p.get('stop_cid'):self._protect(a,c,p);return
             r=self.query_known(a,c,p['stop_cid'],p['symbol'])
             if r['status']=='FILLED':
