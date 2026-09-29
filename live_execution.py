@@ -193,8 +193,10 @@ class LiveExecutor:
                            free_usdt*D('.99'))
                 budget=min(budget,D(a.get('capital', 100))*D(a.get('max_risk_pct', 2.0))/100/stop_ratio)
             
-            # حد أدنى
-            if budget < D('10'):
+            # حد أدنى لتفادي فشل أوامر الأهداف المجزأة 50% مع عمولات بايننس
+            if budget < D('11.5') and free_usdt >= D('12.0'):
+                budget = D('12.0')
+            if budget < D('11.0'):
                 return False
             
             qty=c.quantity(symbol,budget*D('.998')/base,base,plan['intent']=='MARKET')
@@ -211,7 +213,7 @@ class LiveExecutor:
             if plan['intent']=='LIMIT':params.update(price=dec(c.price_tick(symbol,target)),timeInForce='GTC')
             p={'id':pid,'symbol':symbol,'pool':plan['pool'],'state':'PENDING','plan':dict(plan),
                'source_time':stamp,'budget':dec(budget),'buy_cid':cid,'buy_params':params,
-               'created':now,'expires':stamp+12*3600,'stop':dec(stop),'qty':'0','original_qty':'0',
+               'created':now,'expires':stamp+600,'stop':dec(stop),'qty':'0','original_qty':'0',
                'stop_cid':None,'stop_revision':0,'exit':None,'stage':0,'chased':False,
                'total_equity_at_entry':dec(total_equity), 'free_at_entry':dec(free_usdt)}
             a['positions'][pid]=p;self.store.save(a)
@@ -223,7 +225,13 @@ class LiveExecutor:
                     f'إجمالي الرصيد التراكمي {total_equity:.2f} USDT | الحر {free_usdt:.2f} | المستخدم {used:.2f} | حد الإنفاق لهذه الخطة {budget:.2f} USDT.\n'
                     f'لا يُعد شراءً منفذًا حتى تأكيد Binance.')
                 self._poll_position(a,c,p,now)
-            except Exception as e:self.fault(a,p,e)
+            except Exception as e:
+                p['state']='SKIPPED';self.store.save(a)
+                err_code = str(e)
+                if any(bad in err_code for bad in ('-2014', '-2015', 'Invalid API-key', 'IP restricted')):
+                    self.fault(a,p,e)
+                else:
+                    self.store.notify(uid, pid+':buy_skipped', f'⚠️ تعذر شراء {symbol}: {err_code}\nالحساب لا يزال نشطاً وسيتابع الصفقات القادمة.')
             return True
 
     def _protect(self,a,c,p):
@@ -394,7 +402,7 @@ class LiveExecutor:
                 if p['symbol'] == event['ticker'] and (
                     p['pool'] == event.get('pool') or 
                     {p.get('pool'), event.get('pool')} <= {'GS-V5-ULTRA', 'V5-ULTRA'}
-                ) and p['state'] == 'OPEN' and float(event['timestamp']) > max(p['source_time'], p.get('filled_at', 0))
+                ) and p['state'] == 'OPEN'
             ]
             if not candidates: return
             
@@ -424,7 +432,11 @@ class LiveExecutor:
             try:
                 if event.get('new_sl'):p['stop']=dec(max(D(p['stop']),D(event['new_sl'])))
                 self._start_exit(a,self.client(a),p,kind,fraction)
-            except Exception as e:self.fault(a,p,e)
+            except ExchangeError as e:
+                if not e.uncertain:
+                    self.fault(a,p,e)
+            except Exception as e:
+                self.fault(a,p,e)
             return
 
     def update_stops(self,uid,snapshots):
@@ -466,5 +478,10 @@ class LiveExecutor:
                         if r is not None:self.store.order_result(a['uid'],row['cid'],'ACK',r)
                     except Exception:pass
                 for p in list(self.active(a)):
-                    try:self._poll_position(a,c,p,time.time())
-                    except Exception as e:self.fault(a,p,e)
+                    try:
+                        self._poll_position(a,c,p,time.time())
+                    except ExchangeError as e:
+                        if not e.uncertain:
+                            self.fault(a,p,e)
+                    except Exception as e:
+                        self.fault(a,p,e)

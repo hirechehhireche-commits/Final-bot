@@ -89,7 +89,13 @@ POOL_PARAMS_MAP = {
 }
 POOL_WEIGHT_OF_TOTAL = {"P1": 0.35, "P2": 0.15, "P3": 0.12, "S2": 0.20, "GS": 0.38}
 
-BINANCE_HOSTS = ["https://data-api.binance.vision"]
+BINANCE_HOSTS = [
+    "https://data-api.binance.vision",
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+]
 _host_health = {h: 0 for h in BINANCE_HOSTS}
 LAST_CYCLE_COMPLETED_AT = 0
 
@@ -109,11 +115,17 @@ def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list 
     ordered = sorted(hosts, key=lambda h: _host_health.get(h, 0))
     last_err = None
     for h in ordered:
+        if _host_health.get(h, 0) >= 900000:
+            continue
         try:
             r = BINANCE_SESSION.get(h + path, params=params or {}, timeout=timeout)
             if r.status_code == 200:
                 _host_health[h] = 0
                 return r.json()
+            if r.status_code == 451:
+                # محظور جغرافياً على هذا السيرفر — استبعاد دائم حتى لا يستنزف وقت الاستجابة
+                _host_health[h] = 999999
+                continue
             # إذا كان الرمز ملغياً أو غير موجود في بايننس، لا داعي لتكرار المحاولة على باقي المرايا
             if r.status_code == 400 and ("-1121" in r.text or "Invalid symbol" in r.text):
                 raise ValueError(f"رمز ملغي: {params.get('symbol') if params else ''}")
@@ -124,8 +136,50 @@ def _binance_get(path: str, params: dict = None, timeout: int = 15, hosts: list 
         except Exception as e:
             last_err = str(e)
             _host_health[h] = _host_health.get(h, 0) + 1
-        time.sleep(0.2)
     raise RuntimeError(f"فشل الجلب من كل المرايا ({path}): {last_err}")
+
+def fetch_live_ticker_prices(symbols: list, timeout: float = 6.0) -> dict:
+    """جلب أسعار السوق اللحظية لعدة رموز بطلب واحد مجمع فائق السرعة لمنع استنزاف طلبات بايننس والـ Rate Limit"""
+    if not symbols:
+        return {}
+    clean = list(dict.fromkeys(s.strip().upper() for s in symbols if s and isinstance(s, str)))
+    if not clean:
+        return {}
+        
+    if len(clean) == 1:
+        try:
+            res = _binance_get("/api/v3/ticker/price", {"symbol": clean[0]}, timeout=int(timeout) or 5)
+            if isinstance(res, dict) and "price" in res:
+                return {clean[0]: float(res["price"])}
+        except Exception as e:
+            log(f"[PRICE FETCH] {clean[0]}: {e}")
+            return {}
+
+    # رموز متعددة — طلب مجمع Batch بطلب HTTP وحيد بدون مسافات
+    try:
+        import json as _json
+        syms_json = _json.dumps(clean, separators=(',', ':'))
+        res = _binance_get("/api/v3/ticker/price", {"symbols": syms_json}, timeout=int(timeout) or 6)
+        if isinstance(res, list):
+            prices = {}
+            for item in res:
+                if isinstance(item, dict) and "symbol" in item and "price" in item:
+                    prices[item["symbol"]] = float(item["price"])
+            if prices:
+                return prices
+    except Exception as e:
+        log(f"[BATCH PRICE ERROR] {e}")
+
+    # Fallback فردي سريع
+    prices = {}
+    for s in clean:
+        try:
+            r = _binance_get("/api/v3/ticker/price", {"symbol": s}, timeout=4)
+            if isinstance(r, dict) and "price" in r:
+                prices[s] = float(r["price"])
+        except Exception:
+            pass
+    return prices
 
 STATE_LOCK = threading.RLock()
 _STATE = None
@@ -984,8 +1038,8 @@ def update_open_positions_market_data(store: dict, now: datetime):
         log(f"[UPDATE MARKET DATA] {e}")
         return {}
 
-def evaluate_sell_signals(store: dict, now: datetime):
-    """تقييم إشارات البيع — يرسل بيع للصفقات المفتوحة فقط بناءً على السعر الحالي والأهداف"""
+def evaluate_sell_signals(store: dict = None, now: datetime = None):
+    """تقييم إشارات البيع — يرسل بيع للصفقات المفتوحة فقط بناءً على السعر الحالي اللحظي والأهداف"""
     sell_plans = []
     try:
         st = load_state()
@@ -993,10 +1047,28 @@ def evaluate_sell_signals(store: dict, now: datetime):
         if not positions:
             return []
             
-        now_ts = datetime.now(timezone.utc)
+        now_ts = now or datetime.now(timezone.utc)
+        
+        # استخراج خريطة الأسعار اللحظية سواء مررت مباشرة أو من gate store
+        prices_map = {}
+        if isinstance(store, dict):
+            if any(isinstance(v, (int, float)) for v in store.values()):
+                prices_map = store
+            else:
+                for sub in [store.get("5m", {}), store.get("1m", {})]:
+                    if isinstance(sub, dict):
+                        for sym, df in sub.items():
+                            try:
+                                if hasattr(df, "iloc") and len(df) > 0:
+                                    c_col = "Close" if "Close" in df.columns else "close"
+                                    prices_map[sym] = float(df[c_col].iloc[-1])
+                            except Exception:
+                                pass
+                                
         for pos in positions:
             ticker = pos.get("ticker")
-            current_price = float(pos.get("current_price", 0))
+            # الاعتماد على السعر اللحظي الطازج المباشر
+            current_price = float(prices_map.get(ticker, pos.get("current_price", 0)))
             if current_price <= 0:
                 continue
                 
@@ -1015,7 +1087,7 @@ def evaluate_sell_signals(store: dict, now: datetime):
                 sell_pct = pos.get("remaining_pct", 100)
             elif tgt2 > 0 and current_price >= tgt2:
                 sell_type = "T2"
-                reason = f"هدف ثاني {tgt2:.4f}"
+                reason = f"هدف ثانٍ {tgt2:.4f}"
                 sell_pct = pos.get("remaining_pct", 100)
             elif tgt1 > 0 and current_price >= tgt1 and not pos.get("t1_sold", False):
                 sell_type = "T1"
@@ -1024,6 +1096,8 @@ def evaluate_sell_signals(store: dict, now: datetime):
             else:
                 try:
                     entry_t = datetime.fromisoformat(pos.get("entry_time", ""))
+                    if entry_t.tzinfo is None:
+                        entry_t = entry_t.replace(tzinfo=timezone.utc)
                     hold_h = (now_ts - entry_t).total_seconds() / 3600
                     if hold_h > 5:
                         sell_type = "TIME"
@@ -1066,11 +1140,9 @@ def evaluate_sell_signals(store: dict, now: datetime):
     except Exception as e:
         log(f"[SELL EVAL] {e}")
         return []
-        log(f"[SELL EVAL] {e}")
-        return []
 
 def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 0.0, reason: str = ""):
-    """تحديث حالة الصفقة وتدوين الأرباح المحققة في الحافظة الورقية عند البيع"""
+    """تحديث حالة الصفقة وتدوين الأرباح المحققة في الحافظة الورقية وتزامن حسابات المستخدمين"""
     try:
         st = load_state()
         positions = st.get("open_positions", [])
@@ -1161,6 +1233,30 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                 
         st["open_positions"] = positions
         st["paper"] = paper
+        
+        # مزامنة مراكز الحافظة الورقية لجميع المشتركين لضمان دقة وتطابق الواجهات
+        for uid_str, u in st.get("users", {}).items():
+            u_paper = u.get("paper", {})
+            if isinstance(u_paper, dict):
+                u_positions = u_paper.get("positions", {})
+                if pos_id in u_positions:
+                    upos = u_positions[pos_id]
+                    if sell_type == "T1":
+                        upos["t1_sold"] = True
+                        upos["remaining_pct"] = 50
+                        upos["remaining_qty"] = float(upos.get("qty", 0)) * 0.5
+                        upos["sl"] = round(buy_p * 1.003, 4)
+                        upos["status"] = "OPEN"
+                    else:
+                        upos["status"] = "CLOSED"
+                        upos["remaining_pct"] = 0
+                        upos["remaining_qty"] = 0
+                        upos["close_time"] = now_iso
+                        upos["close_type"] = sell_type
+                        upos["close_price"] = curr_price
+                        upos["final_profit_pct"] = round(profit_pct, 2)
+                        upos["final_profit_usd"] = round(profit_usd, 2)
+                        
         save_state()
     except Exception as e:
         log(f"[POSITION UPDATE] {e}")
@@ -1229,100 +1325,105 @@ def send_sell_alerts_immediately(sell_plans: list):
     except Exception as e:
         log(f"[SELL ALERTS ERROR] {e}")
 
+_GUARD_LOCK = threading.Lock()
+_LAST_GUARD_TS = 0.0
+_LAST_LIVE_PRICES = {}
+
 def refresh_open_positions_live_and_guard(send_alerts: bool = True) -> list:
     """تحديث أسعار السوق اللحظية لجميع الصفقات المفتوحة مباشرة من بايننس
-    وفحص شروط الخروج (وقف الخسارة، الأهداف، انتهاء الوقت) فوراً ولحظياً كل ثانيتين"""
-    try:
-        st = load_state()
-        positions = st.get("open_positions", [])
-        open_pos = [p for p in positions if p.get("status") == "OPEN"]
-        if not open_pos:
-            return []
-            
-        tickers = list(set([p.get("ticker") for p in open_pos if p.get("ticker")]))
-        if not tickers:
-            return []
-            
-        # 1. جلب الأسعار اللحظية من بايننس
-        live_prices = {}
-        for sym in tickers:
-            try:
-                res = _binance_get("/api/v3/ticker/price", {"symbol": sym}, timeout=2.5)
-                if isinstance(res, dict) and "price" in res:
-                    live_prices[sym] = float(res["price"])
-            except Exception:
-                pass
+    وفحص شروط الخروج (وقف الخسارة، الأهداف، انتهاء الوقت) فوراً ولحظياً بأعلى كفاءة"""
+    global _LAST_GUARD_TS, _LAST_LIVE_PRICES, LATEST_SELL_PLANS
+    with _GUARD_LOCK:
+        try:
+            st = load_state()
+            positions = st.get("open_positions", [])
+            open_pos = [p for p in positions if p.get("status") == "OPEN"]
+            if not open_pos:
+                return []
                 
-        if not live_prices:
-            return []
+            tickers = list(dict.fromkeys([p.get("ticker") for p in open_pos if p.get("ticker")]))
+            if not tickers:
+                return []
+                
+            now_epoch = time.time()
+            now_ts = datetime.now(timezone.utc)
             
-        now_ts = datetime.now(timezone.utc)
-        changed = False
-        
-        for pos in open_pos:
-            ticker = pos.get("ticker")
-            if ticker not in live_prices:
-                continue
-            curr_p = live_prices[ticker]
-            if curr_p <= 0:
-                continue
-            old_p = float(pos.get("current_price", curr_p))
-            pos["prev_price"] = old_p
-            pos["current_price"] = curr_p
-            pos["tick_dir"] = "UP" if curr_p > old_p else ("DOWN" if curr_p < old_p else "NONE")
-            pos["last_tick_time"] = time.time()
-            
-            buy_p = float(pos.get("buy_price", pos.get("entry_price", curr_p)))
-            diff_pct = ((curr_p - buy_p) / buy_p) * 100.0 if buy_p > 0 else 0.0
-            rem_qty = float(pos.get("remaining_qty", pos.get("qty", 0.0)))
-            profit_usd = rem_qty * (curr_p - buy_p)
-            pos["unrealized_pnl_pct"] = round(diff_pct, 2)
-            pos["unrealized_pnl_usd"] = round(profit_usd, 2)
-            changed = True
-            
-        st["open_positions"] = positions
-        if changed:
-            save_state()
-            
-        # 2. تقييم إشارات البيع فوراً
-        sell_plans = evaluate_sell_signals({}, now_ts)
-        if sell_plans:
-            global LATEST_SELL_PLANS
-            LATEST_SELL_PLANS = sell_plans
-            for sell in sell_plans:
-                update_position_after_sell(sell["position_id"], sell["sell_type"], sell["current_price"], sell.get("reason", ""))
-                log(f"[LIVE GUARD EXIT] 🚨 تنفيذ خروج فوري: {sell['ticker']} #{sell.get('position_number', 1)} {sell['sell_type']} | {sell.get('reason','')}")
-            
-            trigger_immediate_live_refresh()
-            
-            # إرسال إشارات الخروج لحسابات Binance الحقيقية المربوطة
-            if LIVE and hasattr(LIVE, "STORE") and LIVE.STORE and hasattr(LIVE, "EXEC") and LIVE.EXEC:
+            # 1. جلب الأسعار اللحظية مع تخزين مؤقت خفيف (1.2 ثانية) لمنع مزاحمة الثريدات المتعددة
+            if (now_epoch - _LAST_GUARD_TS) >= 1.2 or not _LAST_LIVE_PRICES:
+                fresh_prices = fetch_live_ticker_prices(tickers, timeout=6.0)
+                if fresh_prices:
+                    _LAST_LIVE_PRICES.update(fresh_prices)
+                    _LAST_GUARD_TS = now_epoch
+                    
+            live_prices = {t: _LAST_LIVE_PRICES[t] for t in tickers if t in _LAST_LIVE_PRICES}
+            if not live_prices:
+                return []
+                
+            changed = False
+            for pos in open_pos:
+                ticker = pos.get("ticker")
+                if ticker not in live_prices:
+                    continue
+                curr_p = live_prices[ticker]
+                if curr_p <= 0:
+                    continue
+                old_p = float(pos.get("current_price", curr_p))
+                pos["prev_price"] = old_p
+                pos["current_price"] = curr_p
+                pos["tick_dir"] = "UP" if curr_p > old_p else ("DOWN" if curr_p < old_p else "NONE")
+                pos["last_tick_time"] = now_epoch
+                
+                buy_p = float(pos.get("buy_price", pos.get("entry_price", curr_p)))
+                diff_pct = ((curr_p - buy_p) / buy_p) * 100.0 if buy_p > 0 else 0.0
+                rem_qty = float(pos.get("remaining_qty", pos.get("qty", 0.0)))
+                profit_usd = rem_qty * (curr_p - buy_p)
+                pos["unrealized_pnl_pct"] = round(diff_pct, 2)
+                pos["unrealized_pnl_usd"] = round(profit_usd, 2)
+                changed = True
+                
+            st["open_positions"] = positions
+            if changed:
+                save_state()
+                
+            # 2. تقييم إشارات البيع فوراً مع تمرير الأسعار اللحظية مباشرة
+            sell_plans = evaluate_sell_signals(live_prices, now_ts)
+            if sell_plans:
+                LATEST_SELL_PLANS = sell_plans
                 for sell in sell_plans:
-                    kind_map = {"T1": "T1_TP", "T2": "T2_TP", "SL": "SAFETY", "TIME": "SAFETY"}
-                    ev_kind = kind_map.get(sell["sell_type"], "SAFETY")
-                    ev = {
-                        "ticker": sell["ticker"],
-                        "pool": sell.get("pool", "GS-V5-ULTRA"),
-                        "kind": ev_kind,
-                        "timestamp": time.time(),
-                        "new_sl": sell.get("sl"),
-                        "position_id": sell.get("position_id"),
-                        "buy_price": sell.get("buy_price")
-                    }
-                    for acc in LIVE.STORE.accounts():
-                        if acc.get("enabled") and acc.get("credential"):
-                            try:
-                                LIVE.EXEC.on_exit(acc["uid"], ev)
-                                log(f"[LIVE EXIT SUBMITTED] تم إرسال خروج حقيقي {ev_kind} لـ {sell.get('ticker')} للحساب {acc['uid']}")
-                            except Exception as e:
-                                log(f"[LIVE EXIT ERROR] {acc.get('uid')} {sell.get('ticker')}: {e}")
-            
-            if send_alerts:
-                send_sell_alerts_immediately(sell_plans)
+                    update_position_after_sell(sell["position_id"], sell["sell_type"], sell["current_price"], sell.get("reason", ""))
+                    log(f"[LIVE GUARD EXIT] 🚨 تنفيذ خروج فوري: {sell['ticker']} #{sell.get('position_number', 1)} {sell['sell_type']} | {sell.get('reason','')}")
                 
-        return sell_plans
-    except Exception as e:
-        log(f"[REFRESH & GUARD ERROR] {e}")
+                trigger_immediate_live_refresh()
+                
+                # إرسال إشارات الخروج لحسابات Binance الحقيقية المربوطة
+                if LIVE and hasattr(LIVE, "STORE") and LIVE.STORE and hasattr(LIVE, "EXEC") and LIVE.EXEC:
+                    for sell in sell_plans:
+                        kind_map = {"T1": "T1_TP", "T2": "T2_TP", "SL": "SAFETY", "TIME": "SAFETY"}
+                        ev_kind = kind_map.get(sell["sell_type"], "SAFETY")
+                        ev = {
+                            "ticker": sell["ticker"],
+                            "pool": sell.get("pool", "GS-V5-ULTRA"),
+                            "kind": ev_kind,
+                            "timestamp": time.time(),
+                            "new_sl": sell.get("sl"),
+                            "position_id": sell.get("position_id"),
+                            "buy_price": sell.get("buy_price")
+                        }
+                        for acc in LIVE.STORE.accounts():
+                            if acc.get("enabled") and acc.get("credential"):
+                                try:
+                                    LIVE.EXEC.on_exit(acc["uid"], ev)
+                                    log(f"[LIVE EXIT SUBMITTED] تم إرسال خروج حقيقي {ev_kind} لـ {sell.get('ticker')} للحساب {acc['uid']}")
+                                except Exception as e:
+                                    log(f"[LIVE EXIT ERROR] {acc.get('uid')} {sell.get('ticker')}: {e}")
+                
+                if send_alerts:
+                    send_sell_alerts_immediately(sell_plans)
+                    
+            return sell_plans
+        except Exception as e:
+            log(f"[REFRESH & GUARD ERROR] {e}")
+            return []
         return []
 
 def run_cycle(reason: str = "scheduled"):
@@ -2174,46 +2275,7 @@ def get_sig_content(u: dict) -> tuple:
 
 def _quick_update_open_positions_prices():
     try:
-        st = load_state()
-        open_pos = [p for p in st.get("open_positions", []) if p.get("status") == "OPEN"]
-        if not open_pos:
-            return
-        symbols = list(set([p.get("ticker") for p in open_pos if p.get("ticker")]))
-        if not symbols:
-            return
-        prices = {}
-        for s in symbols:
-            try:
-                res = _binance_get("/api/v3/ticker/price", {"symbol": s}, timeout=2)
-                if isinstance(res, dict) and "price" in res:
-                    prices[s] = float(res["price"])
-            except Exception:
-                pass
-        if prices:
-            changed = False
-            now_cur = time.time()
-            for p in open_pos:
-                sym = p.get("ticker")
-                if sym in prices:
-                    new_p = prices[sym]
-                    old_p = float(p.get("current_price", 0))
-                    if abs(new_p - old_p) > 1e-8:
-                        p["prev_price"] = old_p
-                        p["current_price"] = new_p
-                        p["tick_dir"] = "UP" if new_p > old_p else ("DOWN" if new_p < old_p else "NONE")
-                        p["last_tick_time"] = now_cur
-                        buy_p = float(p.get("buy_price", p.get("entry_price", new_p)))
-                        if buy_p > 0:
-                            diff_pct = ((new_p - buy_p) / buy_p) * 100.0
-                            rem_qty = float(p.get("remaining_qty", p.get("qty", 0.0)))
-                            p["unrealized_pnl_pct"] = round(diff_pct, 2)
-                            p["unrealized_pnl_usd"] = round(rem_qty * (new_p - buy_p), 2)
-                        changed = True
-                    elif now_cur - float(p.get("last_tick_time", 0)) > 6 and p.get("tick_dir") != "STABLE":
-                        p["tick_dir"] = "STABLE"
-                        changed = True
-            if changed:
-                save_state()
+        refresh_open_positions_live_and_guard(send_alerts=True)
     except Exception:
         pass
 
@@ -2232,9 +2294,11 @@ def live_auto_refresher_loop():
             with LIVE_VIEWERS_LOCK:
                 active_items = list(LIVE_VIEWERS.items())
                 
+            open_count = len([p for p in get_open_positions() if p.get("status") == "OPEN"])
             for cid, viewer in active_items:
-                # إيقاف التحديث إذا مضت 10 دقائق دون نشاط لتوفير البيانات
-                if now_t - viewer.get("opened_at", now_t) > 600:
+                # استمرار التحديث النشط ما دامت هناك صفقات مفتوحة لحماية أموال المستخدم
+                # في حالة عدم وجود صفقات مفتوحة، مهلة ممتدة 12 ساعة لتفادي أي تجمد
+                if open_count == 0 and (now_t - viewer.get("opened_at", now_t) > 43200):
                     unregister_live_viewer(cid)
                     continue
                     

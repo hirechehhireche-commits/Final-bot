@@ -150,6 +150,8 @@ class BinanceSpot:
         # نسمح بالربط بناءً على صحة صيغة المفتاح لتفادي حرمان المستخدم من الربط
         if not a:
             raw_err = str(last_exc) if last_exc else ''
+            if '451' in raw_err or 'restricted location' in raw_err:
+                raise ValueError('خادم البوت يقع في دولة مقيدة من Binance (US IP / 451). حل المشكلة: عند إنشاء السيرفر على Render اختر Region: Frankfurt (Germany EU) ليعمل التداول بسلاسة.')
             if any(k in raw_err for k in ('-1003', 'كثرة الطلبات', '418', '429', 'BUSY', 'NETWORK', 'RATE_LIMIT')):
                 a = {
                     'uid': hashlib.sha256(self.key.encode()).hexdigest()[:16],
@@ -167,14 +169,11 @@ class BinanceSpot:
                 p = self.request('GET', '/sapi/v1/account/apiRestrictions')
                 if isinstance(p, dict):
                     if p.get('enableWithdrawals') is True:
-                        raise ValueError('يجب تعطيل السحب من المفتاح — اذهب لإعدادات API وعطّل Withdraw')
+                        raise ValueError('يجب تعطيل السحب من المفتاح لحماية أموالك — اذهب لإعدادات API وعطّل Withdraw')
                     if p.get('enableSpotAndMarginTrading') is False:
-                        raise ValueError('فعّل صلاحية Spot Trading في المفتاح')
-                    for capability in ('enableFutures', 'enableInternalTransfer', 'permitsUniversalTransfer', 'enableVanillaOptions', 'enablePortfolioMarginTrading'):
-                        if p.get(capability):
-                            raise ValueError('عطّل العقود والتحويلات؛ استخدم مفتاحًا مخصصًا للفوري فقط (Spot فقط)')
+                        raise ValueError('فعّل صلاحية Spot Trading في المفتاح لكي يتمكن البوت من التداول')
             except Exception as e:
-                if any(sec in str(e) for sec in ('تعطيل السحب', 'Spot Trading', 'العقود')):
+                if any(sec in str(e) for sec in ('تعطيل السحب', 'Spot Trading')):
                     raise
                 pass
         return a
@@ -230,28 +229,34 @@ class BinanceSpot:
             if D(ml.get('stepSize', 0)) > 0: q = floor_step(q, ml['stepSize'])
             if D(ml.get('maxQty', 0)) > 0 and q > D(ml['maxQty']): raise ValueError('حجم أكبر من حد المنصة')
             if require_min and q < D(ml.get('minQty', 0)): raise ValueError('الكمية أقل من الحد الأدنى السوقي')
-        if q > D(lot['maxQty']) or (require_min and (q < D(lot['minQty']) or q <= 0)):
+        max_lot = D(lot.get('maxQty', '1000000000'))
+        min_lot = D(lot.get('minQty', '0.00000001'))
+        if q > max_lot or (require_min and (q < min_lot or q <= 0)):
             raise ValueError('الكمية خارج حدود Binance')
         notional = q * D(price)
         for key in ('MIN_NOTIONAL', 'NOTIONAL'):
             f = fs.get(key)
             if not f: continue
             applies = not market or f.get('applyToMarket', f.get('applyMinToMarket', True))
-            if require_min and applies and notional < D(f['minNotional']): raise ValueError('قيمة الأمر أقل من الحد الأدنى')
+            min_notional = D(f.get('minNotional', '5.0'))
+            if require_min and applies and notional < min_notional: raise ValueError('قيمة الأمر أقل من الحد الأدنى')
             if D(f.get('maxNotional', 0)) > 0 and (not market or f.get('applyMaxToMarket', True)) and notional > D(f['maxNotional']):
                 raise ValueError('قيمة الأمر أعلى من الحد الأقصى')
         return q
 
     def price_tick(self, symbol, value):
         f = self.rules(symbol)['filters']['PRICE_FILTER']
-        p = floor_step(value, f['tickSize'])
-        if p < D(f['minPrice']) or (D(f['maxPrice']) > 0 and p > D(f['maxPrice'])): raise ValueError('سعر خارج حدود Binance')
+        p = floor_step(value, f.get('tickSize', '0.01'))
+        min_p = D(f.get('minPrice', '0.00000001'))
+        max_p = D(f.get('maxPrice', 0))
+        if p < min_p or (max_p > 0 and p > max_p): raise ValueError('سعر خارج حدود Binance')
         return p
 
     def query(self, symbol, cid):
         try: return self.request('GET', '/api/v3/order', {'symbol': symbol, 'origClientOrderId': cid})
         except ExchangeError as e:
-            if e.code == -2013: return None
+            if e.code == -2013 or 'Order does not exist' in str(e):
+                return {'status': 'CANCELED', 'executedQty': '0', 'cummulativeQuoteQty': '0'}
             raise
 
     def cancel(self, symbol, cid):
