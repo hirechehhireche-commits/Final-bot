@@ -27,3 +27,7 @@ services:
         value: /var/data
       - key: TITAN_GATE_DAYS
         value: '4'
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: KEEPALIVE_ENABLED
+        value: '1'

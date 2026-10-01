@@ -276,6 +276,16 @@ def save_state():
             f.flush()
         os.chmod(tmp, 0o600)
         os.replace(tmp, STATE_FILE)
+        # احتراز إضافي: نسخة احتياطية ثانية في /var/data/backup إن وجد
+        try:
+            backup_dir = os.path.join(WORKSPACE_DIR, "backup")
+            if os.path.exists(WORKSPACE_DIR) and "var/data" in WORKSPACE_DIR:
+                os.makedirs(backup_dir, exist_ok=True)
+                backup_file = os.path.join(backup_dir, "bot_state_backup.json")
+                with open(backup_file, "w", encoding="utf-8") as bf:
+                    json.dump(_STATE, bf, ensure_ascii=False, default=str)
+        except Exception:
+            pass
 def get_user(chat_id: int, create: bool = True) -> dict:
     st = load_state()
     key = str(chat_id)
@@ -371,12 +381,25 @@ def tg(method: str, retries: int = 2, timeout: float = 6.0, **params):
     return None
 
 def answer_cb(cb_id, text: str = ""):
-    """إلغاء دوران الزر فورياً في التيليجرام بشكل غير متزامن فائق السرعة"""
+    """إلغاء دوران الزر فورياً في التيليجرام بشكل غير متزامن فائق السرعة
+    مع إعادة محاولة إذا فشل (يمنع تجمد الزر عند استيقاظ Render)"""
     if not cb_id:
         return
     def _fire():
+        for attempt in range(3):
+            try:
+                TG_SESSION.post(
+                    f"{TG_API}/answerCallbackQuery",
+                    json={"callback_query_id": cb_id, "text": text or None},
+                    timeout=3.0
+                )
+                return
+            except Exception:
+                time.sleep(0.3 * (attempt+1))
+        # Fallback عبر requests مباشر إذا فشل الـ Session
         try:
-            TG_SESSION.post(
+            import requests as _r
+            _r.post(
                 f"{TG_API}/answerCallbackQuery",
                 json={"callback_query_id": cb_id, "text": text or None},
                 timeout=3.0
@@ -2888,17 +2911,23 @@ def handle_callback(cb: dict):
     try:
         unregister_live_viewer(chat_id)
         if data == "nav:more":
-            # تحديث فوري وشامل لبيانات لوحة التحكم مع حماية ضد إرهاق السيرفر
+            # استجابة فورية فائقة السرعة أولاً (تمنع شعور التجمد عند استيقاظ Render)
             try:
-                cleanup_stale_and_delisted_positions()
-                _quick_update_open_positions_prices()
-                now_t = time.time()
-                # لا نبدأ دورة بيانات ثقيلة إذا اكتملت دورة فحص قبل أقل من 60 ثانية تفادياً لكثرة الطلبات (-1003)
-                if not CYCLE_LOCK.locked() and (now_t - globals().get("LAST_CYCLE_COMPLETED_AT", 0)) > 60:
-                    threading.Thread(target=run_cycle, args=("panel_open",), daemon=True).start()
-            except Exception as _e:
-                log(f"[PANEL REFRESH] {_e}")
-            send_msg(chat_id, "🎛️ <b>لوحة التحكم الرئيسية</b>\n━━━━━━━━━━━━━━\nاختر القسم:", full_menu_kb(u), msg_id=msg_id)
+                send_msg(chat_id, "🎛️ <b>لوحة التحكم الرئيسية</b>\n━━━━━━━━━━━━━━\nاختر القسم:", full_menu_kb(u), msg_id=msg_id)
+            except Exception:
+                pass
+            # ثم تحديث شامل في الخلفية
+            def _bg_refresh():
+                try:
+                    cleanup_stale_and_delisted_positions()
+                    _quick_update_open_positions_prices()
+                    now_t = time.time()
+                    if not CYCLE_LOCK.locked() and (now_t - globals().get("LAST_CYCLE_COMPLETED_AT", 0)) > 60:
+                        run_cycle("panel_open")
+                        trigger_immediate_live_refresh()
+                except Exception as _e:
+                    log(f"[PANEL REFRESH] {_e}")
+            threading.Thread(target=_bg_refresh, daemon=True).start()
         elif data in ("nav:less","nav:main"):
             send_msg(chat_id, "🤖 <b>بوت التداول الذكي</b>\n━━━━━━━━━━━━━━\nاضغط لفتح اللوحة", more_kb(), msg_id=msg_id)
         elif data == "m:abt":
@@ -3193,26 +3222,47 @@ def _safe_dispatch_update(upd: dict):
         log(f"[POLL_DISPATCH] خطأ: {e}\n{traceback.format_exc()}")
 
 def poll_loop():
+    BREAKER.heartbeat("poll_loop")
     st = load_state()
     offset = st.get("tg_offset")
+    consecutive_failures = 0
     while True:
         try:
+            BREAKER.heartbeat("poll_loop")
             params = {"timeout": 20, "allowed_updates": ["message", "callback_query"]}
             if offset:
                 params["offset"] = offset
             ups = tg("getUpdates", retries=2, **params)
             if ups is None:
+                consecutive_failures += 1
+                if consecutive_failures > 10:
+                    log(f"[POLL] ⚠️ 10 فشل متتالي - إعادة تشغيل الاتصال بتيليجرام")
+                    time.sleep(5)
+                    consecutive_failures = 0
                 time.sleep(1)
                 continue
+            consecutive_failures = 0
             for upd in ups:
                 offset = upd["update_id"] + 1
                 # معالجة كل ضغطة زر أو رسالة فورياً في خيط مستقل فائق السرعة دون أي انتظار
-                UPDATE_EXECUTOR.submit(_safe_dispatch_update, upd)
+                try:
+                    UPDATE_EXECUTOR.submit(_safe_dispatch_update, upd)
+                except Exception as e:
+                    log(f"[POLL] فشل إرسال للمسبح: {e}")
+                    # fallback مباشر إذا المسبح ممتلئ
+                    _safe_dispatch_update(upd)
             if ups:
-                _STATE["tg_offset"] = offset
+                try:
+                    _STATE["tg_offset"] = offset
+                    # حفظ offset كل 10 تحديثات لتفادي الفقدان
+                    if offset % 10 == 0:
+                        save_state()
+                except Exception:
+                    pass
         except Exception as e:
-            log(f"[POLL] خطأ الحلقة: {e}")
-            time.sleep(2)
+            consecutive_failures += 1
+            log(f"[POLL] خطأ الحلقة ({consecutive_failures}): {e}")
+            time.sleep(2 + min(consecutive_failures, 10))
 
 class _BaseHealthHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -3254,6 +3304,54 @@ def health_loop():
     except Exception as e:
         log(f"[HEALTH] تعذر: {e}")
 
+def keepalive_loop():
+    """حلقة إبقاء ذاتي - تمنع نوم Render حتى لو سقط UptimeRobot
+    ترسل ping داخلي كل 10 دقائق + خارجي عبر PUBLIC_BASE_URL إن وجد
+    + تراقب نبض poll_loop وتعيد تشغيله إذا تجمد"""
+    BREAKER.heartbeat("keepalive")
+    last_poll_check = time.time()
+    while True:
+        try:
+            time.sleep(300)  # كل 5 دقائق (أكثر تكراراً لمنع نوم Render)
+            BREAKER.heartbeat("keepalive")
+            # 1. Ping داخلي (يُبقي السيرفر مستيقظاً)
+            try:
+                import requests as _req
+                _req.get(f"http://127.0.0.1:{HEALTH_PORT}/ping", timeout=3)
+                log("[KEEPALIVE] ✅ ping داخلي 127.0.0.1")
+            except Exception:
+                pass
+            # 2. Ping خارجي عبر PUBLIC_BASE_URL إن وجد (احتراز ضد UptimeRobot)
+            try:
+                pub_url = os.environ.get("PUBLIC_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or ""
+                if pub_url:
+                    pub_url = pub_url.rstrip("/")
+                    _req.get(f"{pub_url}/ping", timeout=5)
+                    log("[KEEPALIVE] ✅ ping خارجي عبر PUBLIC_BASE_URL")
+            except Exception as e:
+                log(f"[KEEPALIVE] خارجي فشل (طبيعي إن لم يضبط PUBLIC_BASE_URL): {e}")
+            
+            # 3. فحص نبض poll_loop - إذا لم يستجب منذ 3 دقائق، ننبه
+            if time.time() - last_poll_check > 180:
+                last_poll_check = time.time()
+                try:
+                    heartbeats = BREAKER.heartbeats
+                    poll_last = heartbeats.get("poll_loop", 0)
+                    if poll_last > 0 and (time.time() - poll_last) > 180:
+                        log(f"[KEEPALIVE] ⚠️ poll_loop لم يستجب منذ {int(time.time()-poll_last)} ثانية - قد يكون متجمد")
+                        # محاولة إيقاظ عبر إرسال getMe
+                        try:
+                            tg("getMe", retries=1, timeout=5)
+                            log("[KEEPALIVE] محاولة إيقاظ poll_loop عبر getMe")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    log(f"[KEEPALIVE] فحص النبض فشل: {e}")
+                    
+        except Exception as e:
+            log(f"[KEEPALIVE ERROR] {e}")
+            time.sleep(60)
+
 def main():
     print("="*88, flush=True)
     print(f"  {SIGNAL_BOT_VERSION} — {STRATEGY_PROVENANCE}", flush=True)
@@ -3282,6 +3380,7 @@ def main():
     threading.Thread(target=cycle_loop, daemon=True, name="cycle").start()
     threading.Thread(target=live_auto_refresher_loop, daemon=True, name="live_auto_refresher").start()
     threading.Thread(target=watch_loop, daemon=True, name="watch").start()
+    threading.Thread(target=keepalive_loop, daemon=True, name="keepalive").start()  # احتراز ضد سقوط UptimeRobot
     def _boot_welcome_when_ready():
         for _ in range(20):
             st2 = load_state()
