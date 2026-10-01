@@ -84,9 +84,11 @@ def account(uid):return STORE.account(uid) if STORE else {'credential':None,'ena
 def panel(u):
     a=account(u['id']);active=EXEC.active(a) if EXEC else []
     venue=STORE.venue if STORE else os.environ.get('BINANCE_ENV','live')
-    label='💰 حقيقي — Binance Spot' if venue=='live' else '🧪 تجريبي — Testnet'
-    if a.get('use_full_balance') or a.get('capital',0)==0:
-        capital_text = "💎 <b>كامل الرصيد تراكمي</b> ✅"
+    label='حقيقي - Binance Spot' if venue=='live' else 'تجريبي - Testnet'
+    if not a.get('credential'):
+        capital_text = "💵 غير مربوط - اضغط ربط binance"
+    elif a.get('use_full_balance') or a.get('capital',0)==0:
+        capital_text = "💎 كامل الرصيد تراكمي ✅"
     else:
         capital_text = f'💵 مخصص: {a["capital"]:g} | سقف: {a["max_order"]:g}'
     equity_info = ""
@@ -97,23 +99,36 @@ def panel(u):
             total_eq, free, used = EXEC.get_total_equity(a, EXEC.client(a))
             equity_info = (
                 f"━━━━━━━━━━━━━━\n"
-                f"📊 <b>الرصيد</b>\n"
+                f"📊 <b>رصيدك الحقيقي:</b>\n"
                 f"• الإجمالي: <b>{total_eq:.2f} USDT</b>\n"
                 f"• الحر: {free:.2f} | المستخدم: {used:.2f}\n"
             )
         except Exception: pass
+    # نص مختصر وصادق يطابق الواقع
+    if not a.get('credential'):
+        return (
+            f"🚀 <b>لوحة التداول</b>\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🌐 {label}\n"
+            f"🔐 الربط: {status_icon} غير مربوط\n"
+            f"⚡ التداول: {trade_icon}\n"
+            f"{capital_text}\n"
+            f"📂 مراكز: {len(active)}\n"
+            "━━━━━━━━━━━━━━\n"
+            "💡 اربط Binance لبدء التداول الحقيقي\n"
+        )
     return (
         f"🚀 <b>لوحة التداول</b>\n"
         f"━━━━━━━━━━━━━━\n"
         f"🌐 {label}\n"
-        f"🔐 الربط: {status_icon} {'مكتمل ومشفّر' if a.get('credential') else 'غير مربوط'}\n"
+        f"🔐 الربط: {status_icon} مربوط ومشفّر\n"
         f"⚡ التداول: {trade_icon}\n"
         f"{capital_text}\n"
-        f"📂 مراكز نشطة: {len(active)}\n"
+        f"📂 مراكز: {len(active)}\n"
         + equity_info +
         (f"⚠️ {B.esc(a['halt'])}\n" if a.get('halt') else '') +
         "━━━━━━━━━━━━━━\n"
-        "💡 <b>ملاحظة:</b> الدخول بإشارات جديدة فقط — وقف سوقي بعد الملء\n"
+        "💡 الدخول بإشارات جديدة فقط\n"
     )
 
 def keyboard(u):
