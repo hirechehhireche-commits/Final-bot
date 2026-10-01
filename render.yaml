@@ -8,10 +8,6 @@ services:
     startCommand: python TITAN_UNIFIED_BOT.py
     healthCheckPath: /ping
     autoDeployTrigger: 'off'
-    disk:
-      name: titan-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: '3.11.11'
@@ -19,6 +15,12 @@ services:
         sync: false
       - key: ADMIN_CHAT_ID
         sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        value: 'hirechehhireche-commits/Final-bot'
+      - key: GITHUB_BRANCH
+        value: 'main'
       - key: TITAN_PRIVATE
         value: '1'
       - key: TITAN_GATE_DAYS

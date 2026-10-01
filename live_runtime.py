@@ -149,21 +149,11 @@ def keyboard(u):
     return rows
 
 def make_token(uid):
-    if not PUBLIC_URL:raise ValueError('اضبط PUBLIC_BASE_URL على رابط Render الذي يبدأ بـhttps://')
-    STORE.cipher()
-    with TOKEN_LOCK:
-        now=time.time()
-        for k,v in list(TOKENS.items()):
-            if v['expires']<now or v['uid']==str(uid):TOKENS.pop(k,None)
-        token=secrets.token_urlsafe(32)
-        TOKENS[hashlib.sha256(token.encode()).hexdigest()]={'uid':str(uid),'expires':now+600}
-    return PUBLIC_URL+'/connect#'+token
+    # تم إزالة ربط الصفحة الآمنة حسب طلب المستخدم - استخدم الربط المباشر في البوت فقط
+    raise ValueError('ربط الصفحة الآمنة تم إزالته - استخدم زر ربط binance المباشر في البوت')
 
 def consume_token(token):
-    with TOKEN_LOCK:
-        row=TOKENS.pop(hashlib.sha256(token.encode()).hexdigest(),None)
-    if not row or row['expires']<time.time():raise ValueError('الرابط منتهي أو مستخدم. اطلب رابطًا جديدًا من زر Binance')
-    return row['uid']
+    raise ValueError('ربط الصفحة تم إزالته')
 
 def start_easy_flow(uid, full_mode=True):
     """بدء تدفق الإدخال السهل المباشر"""
@@ -288,60 +278,14 @@ def handle_easy_text(uid, text, msg_id=None, user_obj=None):
                     [[B.bt('0 = كامل الرصيد 💎','api:easy_cap_0')],[B.bt('❌ إلغاء','api:easy_cancel')]])
                 return True
 
-        elif step=='capital':
-            # يمكن أن يكون رقم أو callback
-            try:
-                cap=float(txt)
-                if not (0<=cap<=100000):
-                    raise ValueError()
-            except Exception:
-                B.send_msg(uid,'⚠️ أرسل رقم 0-100000 أو /cancel')
-                return True
-            try:
-                if msg_id: B.tg('deleteMessage', chat_id=uid, message_id=msg_id)
-            except Exception: pass
-            flow['custom_capital']=cap
-            flow['step']='max_order'
-            B.save_state()
+        elif step=='capital' or step=='max_order':
+            # تم إزالة الربط المخصص حسب طلب المستخدم - فقط وضع كامل الرصيد التراكمي
             B.send_msg(uid,
-                f'✅ رأس المال {cap:g} USDT\n\n'
-                '4️⃣ أرسل <b>الحد الأقصى للصفقة</b> USDT — مثلاً 100\n'
-                '• اكتب 0 = بدون سقف في وضع كامل الرصيد\n'
-                '• 0-100000',
-                [[B.bt('0 = بدون سقف','api:easy_max_0'),B.bt('100','api:easy_max_100')],[B.bt('❌ إلغاء','api:easy_cancel')]])
-            return True
-
-        elif step=='max_order':
-            try:
-                mx=float(txt)
-                if not (0<=mx<=100000):
-                    raise ValueError()
-            except Exception:
-                B.send_msg(uid,'⚠️ أرسل رقم 0-100000 أو /cancel')
-                return True
-            try:
-                if msg_id: B.tg('deleteMessage', chat_id=uid, message_id=msg_id)
-            except Exception: pass
-            key=flow.get('key','')
-            secret=flow.get('secret','')
-            cap=flow.get('custom_capital',0)
-            full_mode = (cap==0 or mx==0 or flow.get('full_mode'))
-            # إذا capital=0 → full_mode تلقائي
-            try:
-                EXEC.connect(uid, key, secret, cap, mx, use_full_balance=bool(full_mode or cap==0))
-                u['flow']=None
-                B.save_state()
-                B.send_msg(uid,
-                    f'✅ <b>تم الربط بنجاح {"— وضع كامل الرصيد 💎" if full_mode else ""}</b>\n\n'
-                    f'💵 رأس المال {cap:g} USDT | سقف {mx:g} USDT\n'
-                    '🔐 مشفّر ومحفوظ — رسائل المفاتيح حُذفت\n'
-                    'فعّل التداول من ⚡ التداول الحقيقي',
-                    keyboard(u))
-            except Exception as e:
-                u['flow']=None
-                B.save_state()
-                err=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else type(e).__name__
-                B.send_msg(uid,'⚠️ فشل الربط: '+B.esc(err), keyboard(u))
+                '💎 <b>وضع كامل الرصيد التراكمي فقط</b>\n\n'
+                'تم إزالة الربط المخصص حسب التحديث الجديد.\n'
+                'سيتم استخدام كامل رصيدك بشكل تراكمي.\n\n'
+                'اكتب /cancel للإلغاء وابدأ من جديد بزر ربط binance.',
+                [[B.bt('❌ إلغاء','api:easy_cancel')]])
             return True
 
     except Exception as e:
@@ -381,13 +325,8 @@ def callback(cb,u):
         return True
     try:
         if data=='api:add':
-            url=make_token(uid)
-            B.respond_cb(cb,'🔐 افتح صفحة الربط الآمنة أدناه. الرابط شخصي وصالح 10 دقائق ولمرة واحدة.\n'
-                'أدخل API Key وSecret في الصفحة فقط. حفظ المفتاح لا يفعّل التداول.\n'
-                '💎 وضع كامل الرصيد التراكمي متاح في الصفحة.\n'
-                'أو استخدم الإضافة السهلة المباشرة في البوت إذا تفضل — أقل أماناً لكن أسهل.',
-                [[{'text':'🔐 فتح صفحة ربط Binance — آمنة','url':url}],
-                 [B.bt('⚡ إضافة سهلة مباشرة 💎','api:easy_full')],
+            B.respond_cb(cb,'🔐 استخدم الإضافة المباشرة في البوت عبر زر ربط binance - آمنة ومشفرة.',
+                [[B.bt('ربط binance','api:easy_full')],
                  [B.bt('رجوع','m:api')]])
         elif data in ('api:easy','api:easy_full'):
             full = (data=='api:easy_full')
@@ -404,27 +343,9 @@ def callback(cb,u):
             if usr: usr['flow']=None
             B.save_state()
             B.respond_cb(cb,'❌ أُلغي إدخال المفتاح.',keyboard(u))
-        elif data.startswith('api:easy_cap_'):
-            # اختصارات capital
-            val=data.split('_')[-1]
-            # محاكاة رسالة نصية
-            st=B.load_state()
-            usr=st['users'].get(str(uid))
-            if usr and usr.get('flow') and usr['flow'].get('step')=='capital':
-                # استدعاء handle مباشرة
-                B.respond_cb(cb,f'✅ رأس المال {val}')
-                handle_easy_text(uid, val, None, usr)
-            else:
-                B.respond_cb(cb,'ابدأ من زر الإضافة السهلة أولًا',keyboard(u))
-        elif data.startswith('api:easy_max_'):
-            val=data.split('_')[-1]
-            st=B.load_state()
-            usr=st['users'].get(str(uid))
-            if usr and usr.get('flow') and usr['flow'].get('step')=='max_order':
-                B.respond_cb(cb,f'✅ سقف {val}')
-                handle_easy_text(uid, val, None, usr)
-            else:
-                B.respond_cb(cb,'ابدأ من زر الإضافة السهلة أولًا',keyboard(u))
+        elif data.startswith('api:easy_cap_') or data.startswith('api:easy_max_'):
+            # تم إزالة الربط المخصص - فقط كامل الرصيد
+            B.respond_cb(cb,'💎 وضع كامل الرصيد فقط - الربط المخصص تم إزالته',keyboard(u))
         elif data=='api:full':
             a=account(uid)
             if not a.get('credential'):raise ValueError('اربط المفتاح أولًا ثم فعّل وضع كامل الرصيد')
@@ -525,68 +446,24 @@ def on_cycle(res,baseline=False):
             if s.get('opened'):snaps.append(dict(s,opened_ts=float(B.pd.Timestamp(s['opened']).timestamp())))
         EXEC.update_stops(uid,snaps)
 
-def setup_html(nonce):
-    venue='أموال حقيقية — Binance Spot' if STORE.venue=='live' else 'Testnet — أموال تجريبية'
-    return f'''<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ربط Binance · TITAN v241 EASY</title><style>body{{background:#0e1621;color:white;font:16px Tahoma,sans-serif;max-width:520px;margin:40px auto;padding:20px;line-height:1.8}}form{{background:#182533;padding:24px;border-radius:14px}}input,button{{box-sizing:border-box;width:100%;padding:12px;margin:5px 0 14px;border:1px solid #31495f;border-radius:8px;background:#0e1621;color:white}}button{{background:#327cb5;cursor:pointer}}.note{{color:#abc3d9;font-size:13px}}.check{{display:flex;align-items:center;gap:10px;background:#1e324a;padding:12px;border-radius:8px;margin:10px 0}} .check input{{width:auto}}</style>
-<h2>🔐 ربط Binance — v241 سهل+تراكمي</h2><p>{venue}</p>
-<p class="note">رابط شخصي مؤقت 10 دقائق. أو استخدم الإضافة السهلة المباشرة في البوت (زر ⚡). عطّل السحب وقيّد IP.</p>
-<div class="check"><input type="checkbox" id="fullbal" checked><label for="fullbal">💎 كامل الرصيد (تراكمي)</label></div>
-<form method="post" action="/connect" autocomplete="off"><input type="hidden" id="ticket" name="ticket">
-<label>API Key</label><input name="key" type="password" minlength="16" maxlength="256" required autocomplete="off">
-<label>API Secret</label><input name="secret" type="password" minlength="16" maxlength="256" required autocomplete="new-password">
-<div id="fixedFields">
-<label>رأس المال (0=كامل الرصيد)</label><input id="capital" name="capital" type="number" min="0" max="100000" step="1" value="0">
-<label>سقف الصفقة (0=بدون سقف)</label><input id="max_order" name="max_order" type="number" min="0" max="100000" step="1" value="0">
-</div>
-<input type="hidden" id="use_full" name="use_full_balance" value="1">
-<button id="save" disabled>تحقق واحفظ</button><p id="error" class="note"></p>
-</form>
-<script nonce="{nonce}">
-const token=location.hash.slice(1);history.replaceState(null,'','/connect');
-if(token.length>=32){{document.getElementById('ticket').value=token;document.getElementById('save').disabled=false;}}else{{document.getElementById('error').textContent='افتح رابطًا جديدًا من زر Binance في البوت.';}}
-const full=document.getElementById('fullbal');const cap=document.getElementById('capital');const maxo=document.getElementById('max_order');const usefull=document.getElementById('use_full');const fixed=document.getElementById('fixedFields');
-function toggle(){{if(full.checked){{usefull.value='1';cap.value='0';maxo.value='0';fixed.style.opacity='0.5';}}else{{usefull.value='0';fixed.style.opacity='1';if(cap.value=='0')cap.value='400';if(maxo.value=='0')maxo.value='100';}}}}
-full.addEventListener('change',toggle);toggle();
-</script></html>'''
 
+# Minimal SetupMixin - page linking removed, only direct bot linking
 class SetupMixin:
     def setup_reply(self,body,status=200,nonce=None):
-        payload=body.encode('utf-8');self.send_response(status)
-        self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(payload)))
-        self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer')
-        self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY')
-        self.send_header('Content-Security-Policy',f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{nonce or secrets.token_hex(16)}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
-        self.end_headers();self.wfile.write(payload)
-
-    def do_POST(self):
-        self.connection.settimeout(20)
-        if self.path!='/connect' or STORE is None:self.setup_reply('Not found',404);return
-        if self.headers.get('Origin')!=PUBLIC_URL:self.setup_reply('Forbidden origin',403);return
         try:
-            n=int(self.headers.get('Content-Length','0'))
-            if not 0<n<=8192:raise ValueError('حجم الطلب غير صالح')
-            fields=parse_qs(self.rfile.read(n).decode('utf-8'),strict_parsing=True)
-            if any(len(v)!=1 for v in fields.values()):raise ValueError('طلب غير صالح')
-            uid=consume_token(fields.get('ticket',[''])[0])
-            if not B.is_allowed(int(uid)):raise ValueError('هذا المستخدم غير مخول')
-            use_full = fields.get('use_full_balance',['0'])[0] in ('1','true','on','True')
-            EXEC.connect(uid,fields['key'][0].strip(),fields['secret'][0].strip(),fields['capital'][0],fields['max_order'][0],use_full_balance=use_full)
-            self.setup_reply('<html lang="ar" dir="rtl"><meta charset="utf-8"><h2>✅ تم الربط المشفّر — v241</h2><p>ارجع إلى تلغرام.</p></html>')
-        except Exception as e:
-            message=str(e) if isinstance(e,(ValueError,RuntimeError)) or e.__class__.__name__=='ExchangeError' else 'تعذر الربط؛ راجع الإعدادات واطلب رابطًا جديدًا'
-            self.setup_reply('<meta charset="utf-8"><p dir="rtl">⚠️ '+html.escape(message)+'</p>',400)
-
+            payload=body.encode('utf-8')
+            self.send_response(status)
+            self.send_header('Content-Type','text/html; charset=utf-8')
+            self.send_header('Content-Length',str(len(payload)))
+            self.send_header('Cache-Control','no-store')
+            self.end_headers()
+            self.wfile.write(payload)
+        except:
+            pass
+    def do_POST(self):
+        self._send(b"Page linking removed - use direct bot linking", 410)
     def do_GET(self):
-        if self.path=='/ready':
-            try:
-                state=B.load_state();last=state.get('last_cycle')
-                age=time.time()-B.pd.Timestamp(last).timestamp() if last else float('inf')
-                ok=bool(state.get('engine_initialized')) and age<4*3600+900 and (time.time()-LAST_TICK)<180
-                self._send(b'READY' if ok else b'NOT_READY',200 if ok else 503)
-            except Exception:self._send(b'NOT_READY',503)
-            return
         if self.path=='/connect':
-            if STORE is None:self.setup_reply('Starting',503);return
-            nonce=secrets.token_urlsafe(16);self.setup_reply(setup_html(nonce),nonce=nonce);return
+            self._send(b"Page linking removed - use direct bot linking via bot button", 410)
+            return
         return super().do_GET()

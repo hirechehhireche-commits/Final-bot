@@ -1,5 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor
 #!/usr/bin/env python3
+from concurrent.futures import ThreadPoolExecutor
 # -*- coding: utf-8 -*-
 """
 بوت التداول الذكي — واجهة عصرية منظمة — DUAL 1m+5m
@@ -30,6 +30,12 @@ except Exception:
 
 import gate_data
 import live_runtime as LIVE
+try:
+    import github_persistence as GHDISK
+    HAS_GHDISK = True
+except Exception as _e:
+    GHDISK = None
+    HAS_GHDISK = False
 from emergency_circuit_breaker import BREAKER
 from crash_prediction_engine import CRASH_SHIELD
 try:
@@ -54,47 +60,71 @@ for _x in ALLOWED_USERS_ENV:
     else:
         ALLOWED_NAMES_ENV.add(_x.lower().lstrip("@"))
 
+# القرص الآن ملف واحد داخل GitHub: titan-data في جذر المستودع
+# ليس مجلد ولا قرص Render - ملف يحفظ حالة البوت كاملة
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# احتراز تلقائي: ينشئ القرص تلقائياً بدون أي خطوة يدوية في Render
-# يحاول /var/data (Render Disk) → /data (Fly.io) → ./data → SCRIPT_DIR
 def _auto_detect_and_create():
-    candidates = [
-        "/var/data",           # Render Disk (يحتاج قرص لكن نحاول إنشاؤه)
-        "/data",               # Fly.io / Koyeb
-        os.path.join(SCRIPT_DIR, "data"),  # مجلد data محلي ينشأ تلقائياً
-        SCRIPT_DIR             # fallback أخير
-    ]
-    for base in candidates:
+    """ينشئ ملف titan-data داخل GitHub إن لم يكن موجود"""
+    base_dir = SCRIPT_DIR  # المجلد الأساسي هو مجلد البوت نفسه (داخل GitHub)
+    state_file = os.path.join(base_dir, "titan-data")
+    # إذا كان هناك bot_state.json قديم، انقله لـ titan-data للتوافق
+    old_state = os.path.join(base_dir, "bot_state.json")
+    old_var_data = "/var/data/bot_state.json"
+    try:
+        if os.path.exists(old_var_data) and not os.path.exists(state_file):
+            import shutil
+            shutil.copy2(old_var_data, state_file)
+            try:
+                log(f"[MIGRATE] ✅ نقل الحالة من {old_var_data} إلى {state_file}")
+            except:
+                pass
+        elif os.path.exists(old_state) and not os.path.exists(state_file):
+            import shutil
+            shutil.copy2(old_state, state_file)
+            try:
+                log(f"[MIGRATE] ✅ نقل الحالة من {old_state} إلى {state_file}")
+            except:
+                pass
+    except Exception:
+        pass
+    # إنشاء الملف إن لم يكن موجود
+    try:
+        if not os.path.exists(state_file):
+            with open(state_file, "w", encoding="utf-8") as f:
+                f.write("{}")
+            try:
+                os.chmod(state_file, 0o600)
+            except:
+                pass
+            try:
+                log(f"[AUTO-DISK] ✅ تم إنشاء ملف titan-data داخل GitHub: {state_file}")
+            except:
+                pass
+        else:
+            try:
+                log(f"[AUTO-DISK] ✅ ملف titan-data موجود: {state_file}")
+            except:
+                pass
+    except Exception as e:
         try:
-            os.makedirs(base, exist_ok=True)
-            # اختبار الكتابة
-            test_file = os.path.join(base, ".write_test")
-            with open(test_file, "w", encoding="utf-8") as f:
-                f.write("test")
-            os.remove(test_file)
-            try:
-                log(f"[AUTO-DISK] ✅ تم إنشاء/اكتشاف القرص التلقائي: {base}")
-            except:
-                pass
-            return base
-        except PermissionError:
-            try:
-                log(f"[AUTO-DISK] ⚠️ لا يمكن إنشاء {base} (Permission denied) - جرب التالي")
-            except:
-                pass
-            continue
-        except Exception as e:
-            try:
-                log(f"[AUTO-DISK] ⚠️ فشل {base}: {e}")
-            except:
-                pass
-            continue
-    return SCRIPT_DIR
+            log(f"[AUTO-DISK] ⚠️ فشل إنشاء {state_file}: {e}")
+        except:
+            pass
+    # محاولة استرجاع البيانات من GitHub إذا كان الملف المحلي فارغ (يعمل كـ Disk حقيقي)
+    try:
+        if HAS_GHDISK and GHDISK and GHDISK.is_enabled():
+            GHDISK.restore_if_needed(state_file)
+    except Exception as _e:
+        try:
+            log(f"[GITHUB-DISK] فشل الاسترجاع: {_e}")
+        except:
+            pass
+    return base_dir
 
 _AUTO_BASE = _auto_detect_and_create()
 
-STATE_FILE = os.environ.get("TITAN_STATE_FILE", os.path.join(_AUTO_BASE, "bot_state.json"))
+STATE_FILE = os.environ.get("TITAN_STATE_FILE", os.path.join(_AUTO_BASE, "titan-data"))
 WORKSPACE_DIR = os.environ.get("TITAN_CACHE_DIR", _AUTO_BASE)
 DATA_DAYS = int(os.environ.get("TITAN_GATE_DAYS", "4"))  # 4 أيام إقلاع فائق السرعة
 CYCLE_DELAY_SEC = int(os.environ.get("TITAN_CYCLE_DELAY", "15"))
@@ -115,7 +145,6 @@ except PermissionError:
     WORKSPACE_DIR = _auto_detect_and_create()
     STATE_FILE = os.path.join(WORKSPACE_DIR, "bot_state.json")
 
-GOLDEN_ASSETS = GS_ENGINE.GOLDEN_APPROVED_COINS if HAS_UNIFIED else []
 # قائمة العملات المتوقفة أو الملغاة من Binance Spot (تمنع تماماً من توليد أي صفقات حية)
 DELISTED_OR_INACTIVE = {
     "PLAUSDT", "WTCUSDT", "GTOUSDT", "DNTUSDT", "GXSUSDT", "TCTUSDT", 
@@ -125,15 +154,13 @@ DELISTED_OR_INACTIVE = {
 }
 
 TITAN_ASSETS = ['SOL','FET','DOT','XRP','BNB','ETH','XLM','HBAR','TRX','LINK','ADA','LTC','DOGE','ARB','BCH','ETC','ZEC','BTC','AVAX']  # 19 عملة نشطة - EOS ملغاة من Binance
-# 19 عملة نشطة فقط - استبعاد الملغاة نهائياً من القائمة الأساسية
-# 19 عملة نشطة فقط - استبعاد الملغاة نهائياً من القائمة الأساسية
+# 19 عملة نشطة فقط - استبعاد الملغاة نهائياً
 ALL_DATA_ASSETS = [a+"USDT" if not a.endswith("USDT") else a for a in TITAN_ASSETS]
 ALL_DATA_ASSETS = list(dict.fromkeys(ALL_DATA_ASSETS + ["BTCUSDT"]))  # إزالة التكرار مع الحفاظ على الترتيب
 ALL_DATA_ASSETS = [s for s in ALL_DATA_ASSETS if s not in DELISTED_OR_INACTIVE and s.replace("USDT","") not in DELISTED_OR_INACTIVE]
-ALL_DATA_ASSETS = [s for s in ALL_DATA_ASSETS if s not in DELISTED_OR_INACTIVE and s.replace("USDT","") not in DELISTED_OR_INACTIVE]
 
 SIGNAL_BOT_VERSION = "بوت التداول الذكي"
-BOT_VERSION = "V129 Best - Honest Fix v3 - 19 coins"
+BOT_VERSION = "V129 Best - Clean v4 - GitHub Disk - 19 coins"
 STRATEGY_ID = "simple-dual-1m-5m"
 STRATEGY_PROVENANCE = "بوت تداول ذكي — 1 دقيقة + 5 دقائق"
 
@@ -151,7 +178,6 @@ POOL_PARAMS_MAP = {
     "GS-V5-ULTRA": {"t1_frac": 0.50, "t2_frac_of_rest": 1.0},
     "V5-ULTRA": {"t1_frac": 0.50, "t2_frac_of_rest": 1.0},
 }
-POOL_WEIGHT_OF_TOTAL = {"P1": 0.35, "P2": 0.15, "P3": 0.12, "S2": 0.20, "GS": 0.38}
 
 BINANCE_HOSTS = [
     "https://data-api.binance.vision",
@@ -309,7 +335,15 @@ def load_state() -> dict:
                 if isinstance(loaded, dict):
                     st.update(loaded)
             except Exception as e:
-                raise RuntimeError("ملف حالة البوت تالف") from e
+                log(f"[STATE] ⚠️ ملف الحالة تالف: {e} - إنشاء نسخة احتياطية وبدء حالة جديدة")
+                try:
+                    backup_path = STATE_FILE + f".corrupted.{int(time.time())}"
+                    import shutil
+                    shutil.copy2(STATE_FILE, backup_path)
+                    log(f"[STATE] تم حفظ النسخة التالفة في {backup_path}")
+                except Exception:
+                    pass
+                # Continue with default state instead of crashing
         _STATE = st
         return _STATE
 def save_state():
@@ -335,6 +369,12 @@ def save_state():
                 backup_file = os.path.join(backup_dir, "bot_state_backup.json")
                 with open(backup_file, "w", encoding="utf-8") as bf:
                     json.dump(_STATE, bf, ensure_ascii=False, default=str)
+        except Exception:
+            pass
+        # GitHub Disk: حفظ تلقائي في ملف titan-data داخل GitHub (يعمل كـ Disk حقيقي)
+        try:
+            if HAS_GHDISK and GHDISK and GHDISK.is_enabled():
+                GHDISK.backup_async(STATE_FILE)
         except Exception:
             pass
 def get_user(chat_id: int, create: bool = True) -> dict:
@@ -432,8 +472,7 @@ def tg(method: str, retries: int = 2, timeout: float = 6.0, **params):
     return None
 
 def answer_cb(cb_id, text: str = ""):
-    """إلغاء دوران الزر فورياً في التيليجرام بشكل غير متزامن فائق السرعة
-    مع إعادة محاولة إذا فشل (يمنع تجمد الزر عند استيقاظ Render)"""
+    """إلغاء دوران الزر فورياً - غير متزامن مع حماية من انفجار الثريدات"""
     if not cb_id:
         return
     def _fire():
@@ -447,7 +486,6 @@ def answer_cb(cb_id, text: str = ""):
                 return
             except Exception:
                 time.sleep(0.3 * (attempt+1))
-        # Fallback عبر requests مباشر إذا فشل الـ Session
         try:
             import requests as _r
             _r.post(
@@ -457,7 +495,17 @@ def answer_cb(cb_id, text: str = ""):
             )
         except Exception:
             pass
-    threading.Thread(target=_fire, daemon=True).start()
+    try:
+        # استخدام UPDATE_EXECUTOR إن وجد لتجنب انفجار الثريدات
+        if 'UPDATE_EXECUTOR' in globals() and UPDATE_EXECUTOR:
+            UPDATE_EXECUTOR.submit(_fire)
+        else:
+            threading.Thread(target=_fire, daemon=True).start()
+    except Exception:
+        try:
+            threading.Thread(target=_fire, daemon=True).start()
+        except:
+            pass
 
 def send_msg(chat_id, text: str, kb=None, msg_id: int = None):
     params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
@@ -557,9 +605,10 @@ def api_back_kb() -> list:
     """رجوع خاص بلوحة المنصة"""
     return [[bt("🏠 الرئيسية", "nav:more")]]
 
-# تهيئة تلقائية فورية لنظام التداول
+# تهيئة تلقائية فورية لنظام التداول - مرة واحدة فقط
 try:
-    LIVE.init(sys.modules[__name__])
+    if LIVE and not getattr(LIVE, 'STORE', None):
+        LIVE.init(sys.modules[__name__])
 except Exception:
     pass
 
@@ -1056,8 +1105,9 @@ def run_unified_engine(dual_or_single_store: dict):
                 log(f"[ENGINE:5m] 🎯 إشارة جديدة مؤكدة كل 5 دقائق: {sym} عند {plan['signal_price']:.4f} (RSI {plan['rsi']:.1f} | Vol {plan['vol_ratio']:.2f}x)")
 
     w_golden = 0.82
-    # V129 Best المعتمد — أرقام حقيقية من باكتست 5 سنوات كاملة (بدون أوفر فيتينغ)
-    # NAV 6954.16$ Ret 1638.54% DD 21.08% PF 3.26 Calmar 3.58 Trades 501 — محدث لحظياً
+    # V129 Best - نتائج الباكتست الحقيقية 5 سنوات (2020-2025) من Binance Data Vision
+    # هذه أرقام الباكتست الثابتة المعتمدة - ليست حساب حي (الحساب الحي من paper portfolio)
+    # NAV 6954.16$ Ret 1638.54% DD 21.08% PF 3.26 Calmar 3.58 Trades 501
     return {
         "events": events,
         "entry_plans": entry_plans,
@@ -1069,7 +1119,7 @@ def run_unified_engine(dual_or_single_store: dict):
             "period_start": "2020-01-01",
             "period_end": "2025-09-30",
             "total_days": 2099,
-            "final_nav": 6954.16,
+            "final_nav": 6954.16,  # باكتست ثابت معتمد
             "total_ret": 1638.54,
             "max_dd": 21.08,
             "pf": 3.26,
@@ -1179,7 +1229,7 @@ def load_fingerprints():
         log(f"[FINGERPRINT LOAD] {e}")
 
 def clear_all_old_positions():
-    """مسح كل الصفقات المفتوحة القديمة للبدء النظيف"""
+    """مسح كل الصفقات المفتوحة القديمة للبدء النظيف - يمسح العام والخاص لكل المستخدمين"""
     try:
         st = load_state()
         old_count = len(st.get("open_positions", []))
@@ -1193,11 +1243,20 @@ def clear_all_old_positions():
             "closed_deals": [],
             "since": _now_iso(),
         }
+        # مسح مراكز جميع المستخدمين أيضاً لضمان الاتساق
+        for uid_str, u in st.get("users", {}).items():
+            if isinstance(u, dict):
+                u_paper = u.get("paper", {})
+                if isinstance(u_paper, dict):
+                    u_paper["positions"] = {}
+                    u_paper["deals"] = []
+                    u_paper["cash"] = PAPER_CAPITAL
+                    u_paper["realized"] = 0.0
         save_state()
         global BUY_FINGERPRINTS, SELL_FINGERPRINTS
         BUY_FINGERPRINTS = {}
         SELL_FINGERPRINTS = {}
-        log("[CLEAR] تم تصفير الصفقات القديمة والحافظة الورقية — بداية نظيفة جديدة")
+        log("[CLEAR] تم تصفير الصفقات القديمة والحافظة الورقية للجميع — بداية نظيفة جديدة")
         return old_count
     except Exception as e:
         log(f"[CLEAR] {e}")
@@ -1638,15 +1697,25 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
         st["open_positions"] = positions
         st["paper"] = paper
         
-        # مزامنة مراكز الحافظة الورقية لجميع المشتركين لضمان دقة وتطابق الواجهات
-        # [FIX] حماية من UnboundLocalError إذا لم يُعثر على الصفقة
+        # مزامنة مراكز الحافظة الورقية لجميع المشتركين - نسخة آمنة بدون locals()
         try:
-            _sync_buy_p = float(locals().get("buy_p", 0) or 0)
-            _sync_curr = float(locals().get("curr_price", sell_price) or sell_price or 0)
-            _sync_pct = float(locals().get("profit_pct", 0) or 0)
-            _sync_usd = float(locals().get("profit_usd", 0) or 0)
-            _pos_found = any(p.get("id") == pos_id for p in positions)
-            if _pos_found:
+            # استخدام المتغيرات المحسوبة مسبقاً من الحلقة أعلاه
+            _sync_data = {}
+            for p in positions:
+                if p.get("id") == pos_id:
+                    _sync_data = {
+                        "buy_p": float(p.get("buy_price", p.get("entry_price", 0))),
+                        "curr": float(sell_price) if sell_price > 0 else float(p.get("current_price", 0)),
+                        "profit_pct": float(p.get("final_profit_pct", 0)),
+                        "profit_usd": float(p.get("final_profit_usd", 0))
+                    }
+                    # إعادة حساب الربح إذا لم يكن موجود
+                    if _sync_data["profit_pct"] == 0 and _sync_data["buy_p"] > 0:
+                        _sync_data["profit_pct"] = round((( _sync_data["curr"] - _sync_data["buy_p"]) / _sync_data["buy_p"] * 100), 2)
+                        _sync_data["profit_usd"] = round((p.get("remaining_qty", p.get("qty", 0)) * (_sync_data["curr"] - _sync_data["buy_p"])), 2)
+                    break
+            
+            if _sync_data:
                 for uid_str, u in st.get("users", {}).items():
                     u_paper = u.get("paper", {})
                     if isinstance(u_paper, dict):
@@ -1657,8 +1726,8 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                                 upos["t1_sold"] = True
                                 upos["remaining_pct"] = 50
                                 upos["remaining_qty"] = float(upos.get("qty", 0)) * 0.5
-                                if _sync_buy_p > 0:
-                                    upos["sl"] = round(_sync_buy_p * 1.003, 4)
+                                if _sync_data["buy_p"] > 0:
+                                    upos["sl"] = round(_sync_data["buy_p"] * 1.003, 4)
                                 upos["status"] = "OPEN"
                             else:
                                 upos["status"] = "CLOSED"
@@ -1666,9 +1735,9 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                                 upos["remaining_qty"] = 0
                                 upos["close_time"] = now_iso
                                 upos["close_type"] = sell_type
-                                upos["close_price"] = _sync_curr
-                                upos["final_profit_pct"] = round(_sync_pct, 2)
-                                upos["final_profit_usd"] = round(_sync_usd, 2)
+                                upos["close_price"] = _sync_data["curr"]
+                                upos["final_profit_pct"] = round(_sync_data["profit_pct"], 2)
+                                upos["final_profit_usd"] = round(_sync_data["profit_usd"], 2)
         except Exception as _e:
             log(f"[SYNC USERS POSITIONS] {_e}")
                         
@@ -2326,7 +2395,7 @@ def weekly_report_text(u: dict, week_key: str = None, prices: dict = None) -> st
         
         wins = [d for d in closed_deals if float(d.get("profit_usd", 0)) > 0]
         losses = [d for d in closed_deals if float(d.get("profit_usd", 0)) < 0]
-        win_rate = (len(wins) / len(closed_deals) * 100.0) if closed_deals else 99.8
+        win_rate = (len(wins) / len(closed_deals) * 100.0) if closed_deals else 0.0
         
         return (
             "📅 <b>التقرير الأسبوعي - ورقي</b>\n"
@@ -2352,18 +2421,15 @@ def get_data_collection_status() -> dict:
         s5 = st.get("gate_data_status_5m", {})
         now = datetime.now(timezone.utc)
         from pathlib import Path
+        # تم تنظيف bot_cache - الملفات الآن في المجلد الرئيسي مباشرة
         candidates_1m = [
             Path(WORKSPACE_DIR) / "gate1m_v102.pkl",
-            Path(SCRIPT_DIR) / "bot_cache" / "gate1m_v102.pkl",
             Path(SCRIPT_DIR) / "gate1m_v102.pkl",
-            Path.cwd() / "bot_cache" / "gate1m_v102.pkl",
             Path.cwd() / "gate1m_v102.pkl"
         ]
         candidates_5m = [
             Path(WORKSPACE_DIR) / "gate5m_v102.pkl",
-            Path(SCRIPT_DIR) / "bot_cache" / "gate5m_v102.pkl",
             Path(SCRIPT_DIR) / "gate5m_v102.pkl",
-            Path.cwd() / "bot_cache" / "gate5m_v102.pkl",
             Path.cwd() / "gate5m_v102.pkl"
         ]
         has_cache_1m = any(p.exists() for p in candidates_1m)
@@ -2467,7 +2533,7 @@ def fmt_engine_status(res: dict) -> str:
         txt = (
             "✅ <b>البوت يعمل بشكل طبيعي — نظام ذكي جديد فقط</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            f"• 📦 1m: {frames.get('1m', status['symbols_1m'])} عملة — كل دقيقة\n"
+            f"• 📦 5m: {frames.get('5m', status['symbols_5m'])} عملة — كل 5 دقائق (الرئيسي)\n"
             f"• 📦 5m: {frames.get('5m', status['symbols_5m'])} عملة — كل 5 دقائق\n"
             f"• 🔍 فحص: {gate.get('checked',0)} عملة\n"
             f"• 🟢 شراء جديد: {buy_count} | 🔴 بيع جديد: {sell_count} | 💼 مفتوحة جديدة: {open_count}\n"
@@ -2952,10 +3018,8 @@ def handle_callback(cb: dict):
         elif data == "m:abt":
             send_msg(chat_id, ABOUT_TEXT, api_back_kb(), msg_id=msg_id)
         elif data == "m:sig":
-            txt, kb = get_sig_content(u)
-            res = send_msg(chat_id, txt, kb, msg_id=msg_id)
-            mid = msg_id or (res.get("message_id") if isinstance(res, dict) else None)
-            register_live_viewer(chat_id, mid, "sig", kb=kb, last_text=txt)
+            # تم إزالة زر الإشارات الحية حسب طلب المستخدم
+            send_msg(chat_id, "📡 الإشارات الحية تم دمجها في لوحة التحكم - اضغط 🎛️ فتح لوحة التحكم", full_menu_kb(u), msg_id=msg_id)
         elif data == "m:guard":
             try:
                 txt, kb = get_guard_content(u, chat_id)
@@ -3222,7 +3286,11 @@ def handle_update(upd: dict):
                 log(f"[AUTH] أول مستخدم {cid} أصبح مشرف تلقائياً (callback)")
                 handle_callback(cb)
                 return
-            answer_cb(cb.get("id",""), "🔒 يرجى طلب الوصول أولاً عبر الزر المرفق")
+            answer_cb(cb.get("id",""), "🔒 يرجى طلب الوصول أولاً")
+            try:
+                send_msg(int(cid), ("🔒 <b>الوصول غير مصرح</b>\n" "━━━━━━━━━━━━━━━━━━━━\n" "يرجى طلب الوصول أولاً عبر الزر المرفق ليتم تفعيلك من المشرف.\n" "إذا كنت قد طلبت مسبقاً، فطلبك قيد المراجعة وسيصلك تنبيه فور الموافقة."), [[{"text": "📨 طلب وصول", "callback_data": "acc:req"}]])
+            except Exception:
+                pass
             return
         handle_callback(cb)
 

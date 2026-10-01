@@ -39,10 +39,10 @@ def _load_store(symbols, cache_dir, state, days, api_get, log, workers, interval
     candidate_paths = [
         Path(cache_dir) / cache_name,
         Path(cache_dir).parent / cache_name,
-        Path(cache_dir) / "bot_cache" / cache_name,
-        Path.cwd() / "bot_cache" / cache_name,
+        Path(cache_dir) / "data" / cache_name,
+        Path.cwd() / "data" / cache_name,
         Path.cwd() / cache_name,
-        Path(__file__).resolve().parent / "bot_cache" / cache_name,
+        Path(__file__).resolve().parent / "data" / cache_name,
         Path(__file__).resolve().parent / cache_name
     ]
     path = Path(cache_dir) / cache_name
