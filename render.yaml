@@ -21,13 +21,7 @@ services:
         sync: false
       - key: TITAN_PRIVATE
         value: '1'
-      - key: TITAN_STATE_FILE
-        value: /var/data/bot_state.json
-      - key: TITAN_CACHE_DIR
-        value: /var/data
       - key: TITAN_GATE_DAYS
         value: '4'
-      - key: PUBLIC_BASE_URL
-        sync: false
-      - key: KEEPALIVE_ENABLED
-        value: '1'
+      - key: PORT
+        value: '8080'

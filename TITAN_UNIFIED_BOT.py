@@ -55,9 +55,48 @@ for _x in ALLOWED_USERS_ENV:
         ALLOWED_NAMES_ENV.add(_x.lower().lstrip("@"))
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.environ.get("TITAN_STATE_FILE", os.path.join(SCRIPT_DIR, "bot_state_v241.json"))
-WORKSPACE_DIR = os.environ.get("TITAN_CACHE_DIR", SCRIPT_DIR)
-DATA_DAYS = int(os.environ.get("TITAN_GATE_DAYS", "60"))
+
+# احتراز تلقائي: ينشئ القرص تلقائياً بدون أي خطوة يدوية في Render
+# يحاول /var/data (Render Disk) → /data (Fly.io) → ./data → SCRIPT_DIR
+def _auto_detect_and_create():
+    candidates = [
+        "/var/data",           # Render Disk (يحتاج قرص لكن نحاول إنشاؤه)
+        "/data",               # Fly.io / Koyeb
+        os.path.join(SCRIPT_DIR, "data"),  # مجلد data محلي ينشأ تلقائياً
+        SCRIPT_DIR             # fallback أخير
+    ]
+    for base in candidates:
+        try:
+            os.makedirs(base, exist_ok=True)
+            # اختبار الكتابة
+            test_file = os.path.join(base, ".write_test")
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write("test")
+            os.remove(test_file)
+            try:
+                log(f"[AUTO-DISK] ✅ تم إنشاء/اكتشاف القرص التلقائي: {base}")
+            except:
+                pass
+            return base
+        except PermissionError:
+            try:
+                log(f"[AUTO-DISK] ⚠️ لا يمكن إنشاء {base} (Permission denied) - جرب التالي")
+            except:
+                pass
+            continue
+        except Exception as e:
+            try:
+                log(f"[AUTO-DISK] ⚠️ فشل {base}: {e}")
+            except:
+                pass
+            continue
+    return SCRIPT_DIR
+
+_AUTO_BASE = _auto_detect_and_create()
+
+STATE_FILE = os.environ.get("TITAN_STATE_FILE", os.path.join(_AUTO_BASE, "bot_state.json"))
+WORKSPACE_DIR = os.environ.get("TITAN_CACHE_DIR", _AUTO_BASE)
+DATA_DAYS = int(os.environ.get("TITAN_GATE_DAYS", "4"))  # 4 أيام إقلاع فائق السرعة
 CYCLE_DELAY_SEC = int(os.environ.get("TITAN_CYCLE_DELAY", "15"))
 FETCH_WORKERS = int(os.environ.get("TITAN_FETCH_WORKERS", "6"))
 HEALTH_PORT = int(os.environ.get("PORT", "8080"))
@@ -66,7 +105,15 @@ MAX_SEEN_EVENTS = 6000
 PROXIMITY_PCT = 1.5
 BACKTEST_PAGE_ROWS = 14
 
-os.makedirs(WORKSPACE_DIR, exist_ok=True)
+try:
+    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+except PermissionError:
+    try:
+        log(f"[WARN] {WORKSPACE_DIR} Permission denied - إعادة اكتشاف تلقائي")
+    except:
+        pass
+    WORKSPACE_DIR = _auto_detect_and_create()
+    STATE_FILE = os.path.join(WORKSPACE_DIR, "bot_state.json")
 
 GOLDEN_ASSETS = GS_ENGINE.GOLDEN_APPROVED_COINS if HAS_UNIFIED else []
 # قائمة العملات المتوقفة أو الملغاة من Binance Spot (تمنع تماماً من توليد أي صفقات حية)
@@ -86,7 +133,7 @@ ALL_DATA_ASSETS = [s for s in ALL_DATA_ASSETS if s not in DELISTED_OR_INACTIVE a
 ALL_DATA_ASSETS = [s for s in ALL_DATA_ASSETS if s not in DELISTED_OR_INACTIVE and s.replace("USDT","") not in DELISTED_OR_INACTIVE]
 
 SIGNAL_BOT_VERSION = "بوت التداول الذكي"
-BOT_VERSION = "النسخة العصرية"
+BOT_VERSION = "النسخة العصرية - Fix Freeze v2 - Auto Disk"
 STRATEGY_ID = "simple-dual-1m-5m"
 STRATEGY_PROVENANCE = "بوت تداول ذكي — 1 دقيقة + 5 دقائق"
 
@@ -269,7 +316,11 @@ def save_state():
     with STATE_LOCK:
         if _STATE is None:
             return
-        os.makedirs(os.path.dirname(os.path.abspath(STATE_FILE)), exist_ok=True)
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(STATE_FILE)), exist_ok=True)
+        except PermissionError:
+            # Fallback إلى المجلد المحلي إذا /var/data غير متاح
+            pass
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_STATE, f, ensure_ascii=False, default=str)
