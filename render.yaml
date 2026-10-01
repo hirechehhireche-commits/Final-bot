@@ -23,3 +23,7 @@ services:
         value: '1'
       - key: TITAN_STATE_FILE
         value: /var/data/bot_state.json
+      - key: TITAN_CACHE_DIR
+        value: /var/data
+      - key: TITAN_GATE_DAYS
+        value: '4'

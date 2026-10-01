@@ -69,9 +69,6 @@ BACKTEST_PAGE_ROWS = 14
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
 GOLDEN_ASSETS = GS_ENGINE.GOLDEN_APPROVED_COINS if HAS_UNIFIED else []
-TITAN_ASSETS = ['SOL','FET','DOT','XRP','BNB','ETH','XLM','HBAR','TRX','LINK','ADA','LTC','DOGE','ARB','BCH','ETC','EOS','ZEC','BTC','AVAX']
-ALL_DATA_ASSETS = list(set([a+"USDT" if not a.endswith("USDT") else a for a in GOLDEN_ASSETS + TITAN_ASSETS] + ["BTCUSDT"]))
-
 # قائمة العملات المتوقفة أو الملغاة من Binance Spot (تمنع تماماً من توليد أي صفقات حية)
 DELISTED_OR_INACTIVE = {
     "PLAUSDT", "WTCUSDT", "GTOUSDT", "DNTUSDT", "GXSUSDT", "TCTUSDT", 
@@ -79,6 +76,14 @@ DELISTED_OR_INACTIVE = {
     "DARUSDT", "STPTUSDT", "ELFUSDT", "EOSUSDT", "LRCUSDT", "COSUSDT", 
     "DENTUSDT", "STORJUSDT", "ARDRUSDT", "PLA", "WTC", "GTO", "DNT", "GXS", "TCT", "REEF"
 }
+
+TITAN_ASSETS = ['SOL','FET','DOT','XRP','BNB','ETH','XLM','HBAR','TRX','LINK','ADA','LTC','DOGE','ARB','BCH','ETC','ZEC','BTC','AVAX']  # 19 عملة نشطة - EOS ملغاة من Binance
+# 19 عملة نشطة فقط - استبعاد الملغاة نهائياً من القائمة الأساسية
+# 19 عملة نشطة فقط - استبعاد الملغاة نهائياً من القائمة الأساسية
+ALL_DATA_ASSETS = [a+"USDT" if not a.endswith("USDT") else a for a in TITAN_ASSETS]
+ALL_DATA_ASSETS = list(dict.fromkeys(ALL_DATA_ASSETS + ["BTCUSDT"]))  # إزالة التكرار مع الحفاظ على الترتيب
+ALL_DATA_ASSETS = [s for s in ALL_DATA_ASSETS if s not in DELISTED_OR_INACTIVE and s.replace("USDT","") not in DELISTED_OR_INACTIVE]
+ALL_DATA_ASSETS = [s for s in ALL_DATA_ASSETS if s not in DELISTED_OR_INACTIVE and s.replace("USDT","") not in DELISTED_OR_INACTIVE]
 
 SIGNAL_BOT_VERSION = "بوت التداول الذكي"
 BOT_VERSION = "النسخة العصرية"
@@ -647,6 +652,9 @@ LAST_4H_UPDATE_TS = 0.0
 def load_or_update_4h_store():
     """تحميل كاش 4H التاريخي وتحديثه بآخر شموع مغلقة مباشرة من Binance"""
     global GLOBAL_4H_STORE, LAST_4H_UPDATE_TS
+    # حماية: إذا لم تكن مكتبة T127 محملة (الحزمة الأساسية 10 ملفات) نرجع كاش فارغ
+    if not HAS_UNIFIED or T127 is None:
+        return GLOBAL_4H_STORE or {}
     now_ts = time.time()
     
     # تحميل الكاش من الملف إن لم يكن محملاً
@@ -698,6 +706,8 @@ def load_or_update_4h_store():
 def eval_4h_juggernaut_strategy(now_dt: datetime) -> list:
     """فحص استراتيجية 4H المعتمدة لسلة العملات الـ 20 وإنتاج إشارات الدخول الحقيقية"""
     plans = []
+    if not HAS_UNIFIED or T127 is None:
+        return plans  # غير متاح في الحزمة الأساسية 10 ملفات - نستخدم محرك 5m فقط
     try:
         st = load_state()
     except Exception:
