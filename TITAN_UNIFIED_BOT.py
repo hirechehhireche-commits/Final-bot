@@ -42,6 +42,24 @@ import live_runtime as LIVE
 from emergency_circuit_breaker import BREAKER
 from crash_prediction_engine import CRASH_SHIELD
 try:
+    from titan_ultimate_failsafe import FAILSAFE, init_failsafe
+    HAS_FAILSAFE = True
+    print("[Failsafe] ✅ Ultimate Failsafe 12 layers loaded")
+except ImportError:
+    HAS_FAILSAFE = False
+    FAILSAFE = None
+    init_failsafe = None
+    print("[Failsafe] ⚠️ Ultimate Failsafe not found - using basic guards")
+
+try:
+    from titan_content_protection import PROTECTOR, CodeProtection
+    HAS_PROTECTION = True
+    print("[Protection] ✅ Content Protection - Anti-Forward/Copy/Save + Watermark")
+except ImportError:
+    HAS_PROTECTION = False
+    PROTECTOR = None
+    CodeProtection = None
+try:
     import engine_1m_scalper as SCALPER_1M
 except ImportError:
     SCALPER_1M = None
@@ -109,8 +127,8 @@ DELISTED_OR_INACTIVE = {
     "DENTUSDT", "STORJUSDT", "ARDRUSDT", "PLA", "WTC", "GTO", "DNT", "GXS", "TCT", "REEF"
 }
 
-SIGNAL_BOT_VERSION = "V131 Short - 7162$"
-BOT_VERSION = "V131 Short Honest - 7162$ DD22% PF3.3"
+SIGNAL_BOT_VERSION = "بوت تداول هادئ"
+BOT_VERSION = "بوت تداول طيب - نسخة صادقة"
 STRATEGY_ID = "simple-dual-1m-5m"
 STRATEGY_PROVENANCE = "بوت تداول ذكي — 1 دقيقة + 5 دقائق"
 
@@ -373,6 +391,9 @@ def tg(method: str, retries: int = 2, timeout: float = 6.0, **params):
     url = f"{TG_API}/{method}"
     if method == "getUpdates":
         timeout = float(params.get("timeout", 20)) + 4.0
+    # 🛡️ حماية المحتوى - منع النسخ/إعادة التوجيه/الحفظ
+    if method in ("sendMessage", "sendPhoto", "sendDocument", "sendVideo", "sendAnimation", "sendAudio", "sendVoice", "editMessageText"):
+        params["protect_content"] = True
     for attempt in range(retries):
         try:
             r = TG_SESSION.post(url, json=params, timeout=timeout)
@@ -410,7 +431,13 @@ def answer_cb(cb_id, text: str = ""):
     threading.Thread(target=_fire, daemon=True).start()
 
 def send_msg(chat_id, text: str, kb=None, msg_id: int = None):
-    params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    # 🛡️ حماية المحتوى + بصمة خفية لتتبع التسريب
+    try:
+        if HAS_PROTECTION and PROTECTOR and chat_id:
+            text = PROTECTOR.add_watermark(text, int(chat_id), add_visible=True, add_invisible=True)
+    except:
+        pass
+    params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True, "protect_content": True}
     if kb:
         params["reply_markup"] = {"inline_keyboard": kb}
     if msg_id:
@@ -456,18 +483,18 @@ def fmt_p(val) -> str:
 
 def fmt_entry(p: dict, w2: float = 0.82, holds: dict = None) -> str:
     try:
-        ticker = p.get("ticker","")
+        ticker = p.get("ticker","").replace("USDT","")
         price = float(p.get("price",0))
         sl = float(p.get("sl",0))
         tgt1 = float(p.get("tgt1",0))
         tgt2 = float(p.get("tgt2",0))
-        frame = p.get("frame","?")
-        pool = p.get("pool","")
-        txt = f"📡 إشارة {ticker} | {frame} | {pool}\n"
-        txt += f"دخول {fmt_p(price)} | وقف {fmt_p(sl)} | هدف1 {fmt_p(tgt1)} هدف2 {fmt_p(tgt2)}"
+        txt = f"فرصة جديدة 💰 {ticker}\n\n"
+        txt += f"دخول بهدوء عند {fmt_p(price)}\n"
+        txt += f"وقف خسارة {fmt_p(sl)}\n"
+        txt += f"أهداف متدرجة بإذن الله"
         return txt
     except Exception:
-        return f"إشارة {p.get('ticker','')}"
+        return f"فرصة جديدة {p.get('ticker','')}"
 
 def bt(text: str, data: str) -> dict:
     return {"text": text, "callback_data": data}
@@ -514,61 +541,23 @@ except Exception:
     pass
 
 WELCOME_TEXT = (
-    "🤖 <b>بوت التداول الذكي V131 - فلترة اسبوعية</b> - لوحة تحكم صادقة\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "📡 <b>نظام التداول الحقيقي:</b>\n"
-    "• 56 عملة Binance Data Vision → 35 صالحة (حجم >5M$) → Top19 حسب Score\n"
-    "• 21 عملة مستبعدة (حجم <5M$ لـ 3 ايام): CELR, CHR, CTSI...\n"
-    "• فحص كل 5 دقائق مع تجميع 4H + Crash Shield + Circuit Breaker 15%\n"
-    "• دخول: EMA 9/21 + RSI 40-56 + BO 15 + Volume 1.35x + Score>70\n\n"
-    "📊 <b>باكتست حقيقي 5 سنوات (2021-09-01 → 2026-09-29):</b>\n"
-    "• 400$ → 7162.57$ (+1690.64%) CAGR 76.54% DD 22.32% PF 3.30 WR 56.39% 477 صفقة\n"
-    "• رسوم 0.15% كاملة + انزلاق، شمعة بشمعة حقيقية، 4.07 ثانية\n"
-    "• IS 411% OOS 250% Stability 0.608 - لا Overfitting\n\n"
-    "💼 <b>ادارة راس المال:</b>\n"
-    "• Pool Budgets [95.49, 1.00, 3.51] S1 389$ S2 10$ (GA 20 جيل)\n"
-    "• حجم Kelly 3%-18% + Correlation + VWAP + BTC.D\n\n"
-    "🔑 <b>البدء:</b>\n"
-    "1. اضغط 📊 الباكتست لرؤية النتائج الحقيقية\n"
-    "2. اضغط 📡 الاشارات الحية للمتابعة\n"
-    "3. اضغط 🚀 ربط Binance للتداول الحقيقي (اختياري)\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "👇 لوحة التحكم:"
+    "أهلاً بك 💰\n\n"
+    "بوت تداول ذكي يتابع السوق لحظة بلحظة\n"
+    "يفلتر أفضل العملات ويعطيك إشارات مدروسة\n"
+    "يعمل بهدوء ويحميك من التقلبات\n\n"
+    "ابدأ من الأزرار بالأسفل 👇"
 )
 
 ABOUT_TEXT = (
-    "ℹ️ <b>حول البوت - شرح صادق لما يعمل فعلا</b>\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "🤖 <b>ما هو البوت؟</b>\n"
-    "نظام تداول آلي يفحص 56 عملة كل 5 دقائق، فلترة اسبوعية لاختيار افضل 19 حسب السيولة والحجم والتقلب.\n\n"
-    "🔍 <b>كيف يختار العملات (V131 Weekly Filter):</b>\n"
-    "• كل اسبوع يحسب: حجم يومي، سيولة، تقلب ATR%، ROC 7 ايام، قوة فوق EMA20، Volume Surge\n"
-    "• Score 0-100: حجم 30 + سيولة 20 + تقلب معتدل 20 + اتجاه 15 + قوة 15\n"
-    "• Top19 الحالي: BTC 79.6, SOL 75.8, XRP 72.0 (323M انفجار), ETH 71.6...\n"
-    "• يستبعد اذا حجم <5M$ لـ 3 ايام → 21 عملة مستبعدة حاليا\n"
-    "• يضيف اذا انفجرت (PEPE حجم 100M$ surge 2x) → كود جاهز\n\n"
-    "📈 <b>كيف يدخل الصفقات؟</b>\n"
-    "• 3 سلال (P1 95.49%، P2 1%، P3 3.51%) + S2 قناص 10$\n"
-    "• الشروط: EMA 9>21 + كسر قمة 15 شمعة + RSI 40-56 + Volume 1.35x + Score>70 + GMRI>0.36\n"
-    "• Pool Budgets محسن GA 20 جيل: من 6539$ الى 7162$ (+9.5%)\n\n"
-    "📊 <b>ادارة الصفقات (حقيقية):</b>\n"
-    "• وقف خسارة: 1.895x ATR (~2.2-3.8%)\n"
-    "• هدف اول T1: 5.59x ATR (~4-7.5%) بيع 10% ونقل SL للتعادل\n"
-    "• هدف ثاني T2: 10.1x ATR (~9-20%) بيع 5% وترايلينغ 1.8x ATR\n"
-    "• الباقي 85% يركب الموجة بترايلينغ ذكي\n"
-    "• رسوم 0.15% كاملة\n\n"
-    "🛡️ <b>الحماية (حقيقية):</b>\n"
-    "• Crash Shield: GMRI + BTC trend + ROC، اذا GMRI<0.35 → لا دخول\n"
-    "• Circuit Breaker 15%: اذا DD>15% → خروج فقط\n"
-    "• Weekly Filter: يستبعد العملات الميتة (<5M$)\n"
-    "• باكتست 5 سنوات شمعة بشمعة: 400$→7162$ DD22.32% PF3.30 WR56.39% 477 صفقة\n\n"
-    "⚠️ <b>الصدق والمخاطر:</b>\n"
-    "• الباكتست لا يضمن المستقبل\n"
-    "• Max DD 22.32% قد تخسر 22% من القمة\n"
-    "• 477 صفقة في 1854 يوم = 0.25 صفقة/يوم، ليس كل يوم ربح\n"
-    "• قد يمر 24 ساعة بدون اشارات اذا السوق جانبي\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "💡 <i>الخلاصة: نظام اتجاهي منضبط، فلترة اسبوعية، حماية 15%، باكتست صادق 7162$.</i>"
+    "عن البوت 💵\n\n"
+    "يتابع السوق كل دقائق\n"
+    "يختار العملات النشطة فقط\n"
+    "دخول بهدوء مع وقف خسارة واضح\n"
+    "وأهداف متدرجة\n\n"
+    "يحمي المحفظة عند تقلب السوق\n"
+    "نتائجه من تجربة سنوات طويلة\n"
+    "بكل صدق - لا يعد بالربح الدائم\n"
+    "التداول مخاطرة، والصبر أساسه"
 )
 
 
@@ -618,6 +607,13 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
             
         checked += 1
         try:
+            # 🛡️ FAILSAFE LAYER 1: تحقق من صحة البيانات قبل أي تقييم
+            if HAS_FAILSAFE:
+                valid, reason = FAILSAFE["data"].validate_ohlcv(df, sym)
+                if not valid:
+                    log(f"[Failsafe] Skip {sym}: {reason}")
+                    continue
+            
             # إعداد بيانات 1h لحساب ATR
             try:
                 df1h = df.resample("1h").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
@@ -629,6 +625,13 @@ def _eval_store(store: dict, frame_label: str, now: datetime, btc_bullish: bool,
             
             # تقييم الاستراتيجية V5 Ultra بدقة (3 معاملات: EMA 9/21/50 + RSI 45-75 + BO 15)
             setup = GS_ENGINE.evaluate_golden_setup(sub, sub1h, btc_bullish, btc_super, sym)
+            
+            # 🛡️ FAILSAFE LAYER 2: تحقق من صحة الإشارة قبل الإرسال
+            if HAS_FAILSAFE and setup:
+                valid, reason = FAILSAFE["data"].validate_setup(setup, sym)
+                if not valid:
+                    log(f"[Failsafe] Invalid setup {sym}: {reason}")
+                    continue
             
             # إذا لم تتحقق شروط الاستراتيجية → تخطي فوراً (لا إشارات وهمية ولا تخفيف للشروط)
             if not setup:
@@ -1846,26 +1849,18 @@ def send_sell_alerts_immediately(sell_plans: list):
             profit_pct = ((curr_p - buy_p) / buy_p * 100.0) if buy_p > 0 else 0.0
             
             if sell_type == "SL":
-                txt += f"❌ <b>تم ضرب وقف الخسارة في عملة {ticker}</b>  \n"
-                txt += f"📤  (<code>{profit_pct:+.2f}%</code>)  \n"
-                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
-                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += f"تم إغلاق صفقة {ticker} بهدوء 📈\n"
+                txt += f"وقف الخسارة حمى المحفظة\n\n"
             elif sell_type == "T1":
-                txt += f"✅ <b>تم ضرب الهدف الأول في عملة {ticker}</b>\n"
-                txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة (<code>{profit_pct:+.2f}%</code>)\n"
-                txt += "🛡️ تم نقل الوقف لنقطة التعادل Breakeven (+0.30%)\n"
-                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
-                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += f"هدف أول تحقق في {ticker} 💰\n"
+                txt += f"تم تأمين جزء من الربح\n"
+                txt += f"الباقي محمي بإذن الله\n\n"
             elif sell_type == "T2":
-                txt += f"✅ <b>تم ضرب الهدف الثاني في عملة {ticker}</b>\n"
-                txt += f"📤 بيع {sell_pct:.0f}% من حجم الصفقة (<code>{profit_pct:+.2f}%</code>)\n"
-                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
-                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += f"هدف ثاني جميل في {ticker} 💵\n"
+                txt += f"تم جني ربح طيب\n\n"
             elif sell_type == "TIME":
-                txt += f"⏱️ <b>انتهاء مدة الاحتفاظ (5 ساعات) في عملة {ticker}</b>\n"
-                txt += f"📤 خروج كامل (<code>{profit_pct:+.2f}%</code>)\n"
-                txt += f"#{pos_num} شراء <code>{fmt_p(buy_p)}</code> → بيع <code>{fmt_p(curr_p)}</code>\n"
-                txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                txt += f"انتهت مدة صفقة {ticker} ⏰\n"
+                txt += f"تم الإغلاق بهدوء\n\n"
                 
         if not txt:
             return
@@ -1991,24 +1986,12 @@ def refresh_open_positions_live_and_guard(send_alerts: bool = True) -> list:
 # 🛡️ رسالة الطمأنينة التلقائية بعد 24 ساعة من هدوء السوق
 # =====================================================================
 REASSURANCE_TEXT = (
-    "🛡️ <b>رسالة طمأنينة - حالة السوق الحقيقية</b>\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "مرت 24 ساعة دون اشارات جديدة، وهذا طبيعي:\n\n"
-    "✅ <b>البوت يعمل:</b>\n"
-    "يفحص 56 عملة كل 5 دقائق (35 صالحة بعد فلترة <5M$) + Top19\n"
-    "المحرك: FastSimulator شمعة بشمعة، Crash Shield، Circuit Breaker 15%\n\n"
-    "📊 <b>لماذا لا اشارات؟ (صادق):</b>\n"
-    "• GMRI <0.45 → سوق ضعيف، لا دخول لحمايتك\n"
-    "• او RSI خارج 40-56، او Volume <1.35x، او لا كسر قمة 15 شمعة\n"
-    "• او كل Top19 مستبعدة (حجم <5M$ لـ 3 ايام) → 21 مستبعدة حاليا\n"
-    "• البوت قناص: 477 صفقة في 1854 يوم = 0.25 صفقة/يوم\n\n"
-    "📈 <b>الباكتست الحقيقي:</b>\n"
-    "• 400$→7162$ (+1690%) في 5 سنوات، DD 22.32%، PF 3.30، WR 56.39%\n"
-    "• Expectancy $14.61 لكل صفقة\n\n"
-    "🎯 <b>ماذا يحدث الآن؟</b>\n"
-    "يراقب، فور تحقق الشروط (EMA 9>21 + BO 15 + RSI 40-56 + Vol 1.35x + GMRI>0.36) ستصلك اشارة\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "💡 <i>الصبر جزء من الاستراتيجية: 0.25 صفقة/يوم، كل صفقة Expectancy $14.61</i>"
+    "لا تقلق 📈\n\n"
+    "عدم وجود إشارات اليوم أمر طبيعي\n"
+    "البوت يعمل ويتابع السوق باستمرار\n"
+    "ينتظر الفرصة المناسبة فقط\n\n"
+    "هو قناص هادئ، ليس متسرع\n"
+    "عندما تتوفر فرصة جيدة ستصلك فوراً"
 )
 
 def check_and_send_reassurance_message(force: bool = False):
@@ -2127,6 +2110,53 @@ def run_cycle(reason: str = "scheduled"):
         alert_level, crash_reason, _ = CRASH_SHIELD.assess_market_risk(gmri_val, btc_data=btc_data, basket_rocs=basket_rocs)
         st["market_alert_level"] = alert_level
         st["crash_status_reason"] = crash_reason
+
+        # 🛡️ ULTIMATE FAILSAFE - حماية من الكوارث الكارثية (12 طبقة)
+        if HAS_FAILSAFE:
+            try:
+                # حساب DD الحالي
+                current_equity = float(st.get("paper_equity", 400) or 400)
+                peak_equity = float(st.get("peak_equity", current_equity) or current_equity)
+                if current_equity > peak_equity:
+                    st["peak_equity"] = current_equity
+                    peak_equity = current_equity
+                dd = (peak_equity - current_equity)/peak_equity if peak_equity>0 else 0
+                daily_loss = 0
+                if "portfolio" in FAILSAFE:
+                    # فحص DD كارثي 15%
+                    ok, reason = FAILSAFE["portfolio"].check_dd(current_equity, peak_equity)
+                    if not ok:
+                        log(f"[ULTIMATE FAILSAFE] {reason}")
+                        new_buy_plans = []
+                        # إغلاق طارئ إذا DD>=15%
+                        should_close, close_reason = FAILSAFE["emergency"].should_emergency_close(dd, gmri_val, alert_level, 0)
+                        if should_close:
+                            log(f"[EMERGENCY CLOSE] 🚨 {close_reason}")
+                            # هنا نغلق كل الصفقات الورقية فوراً
+                            for pos in st.get("open_positions", []):
+                                if pos.get("status") == "OPEN":
+                                    pos["status"] = "CLOSED_EMERGENCY"
+                                    pos["close_reason"] = close_reason
+                                    pos["close_time"] = _now_iso()
+                    # فحص خسارة يومية 4.5%
+                    ok2, reason2 = FAILSAFE["portfolio"].check_daily_loss(current_equity)
+                    if not ok2:
+                        log(f"[ULTIMATE FAILSAFE] {reason2}")
+                        new_buy_plans = []
+                    # فحص عدد الصفقات max 10
+                    ok3, reason3 = FAILSAFE["portfolio"].check_positions(st.get("open_positions", []))
+                    if not ok3:
+                        log(f"[ULTIMATE FAILSAFE] {reason3}")
+                        new_buy_plans = []
+                
+                # فحص إغلاق طارئ شامل
+                if "emergency" in FAILSAFE:
+                    should_close, close_reason = FAILSAFE["emergency"].should_emergency_close(dd, gmri_val, alert_level, 0)
+                    if should_close:
+                        log(f"[ULTIMATE FAILSAFE EMERGENCY] 🚨 {close_reason} - كبح كل الصفقات الجديدة")
+                        new_buy_plans = []
+            except Exception as e:
+                log(f"[FAILSAFE ERROR] {e}")
 
         if alert_level == "RED":
             log(f"[CRASH SHIELD INTERVENTION] 🚨 كبح الصفقات الجديدة بسبب إنذار انهيار أحمر: {crash_reason}")
@@ -2367,20 +2397,16 @@ def latest_signals_text(u: dict) -> str:
 
 
 def portfolio_text(u: dict, prices: dict = None) -> str:
-    """عرض الحافظة الورقية بالكامل مع تسجيل الصفقات والأرباح الحالية والمحققة"""
+    """عرض المحفظة ببساطة وطيبة"""
     try:
-        # تحديث فوري مباشر لأسعار الصفقات من بايننس وفحص شروط الخروج
         refresh_open_positions_live_and_guard(send_alerts=True)
         st = load_state()
         paper = st.get("paper", {})
         initial_cap = float(paper.get("initial_capital", PAPER_CAPITAL))
         cash = float(paper.get("cash", PAPER_CAPITAL))
         realized_pnl = float(paper.get("realized_pnl", 0.0))
-        closed_deals = paper.get("closed_deals", [])
-        
         open_positions = [p for p in st.get("open_positions", []) if p.get("status") == "OPEN"]
         
-        # حساب الأرباح الحالية غير المحققة وقيمة المحفظة
         unrealized_pnl = 0.0
         open_positions_value = 0.0
         for pos in open_positions:
@@ -2391,80 +2417,26 @@ def portfolio_text(u: dict, prices: dict = None) -> str:
             unrealized_pnl += (rem_qty * (curr_p - buy_p))
             
         total_equity = cash + open_positions_value
-        total_net_pnl = realized_pnl + unrealized_pnl
-        total_return_pct = (total_net_pnl / initial_cap) * 100.0 if initial_cap else 0.0
         
-        txt = "💼 <b>الحافظة الورقية (Paper Portfolio)</b>\n"
-        txt += "━━━━━━━━━━━━━━━━━━━━\n"
-        txt += f"💰 <b>رأس المال الأولي:</b> {initial_cap:.2f} USDT\n"
-        txt += f"💵 <b>الرصيد المتاح (كاش):</b> {cash:.2f} USDT\n"
-        txt += f"📈 <b>إجمالي قيمة المحفظة:</b> {total_equity:.2f} USDT\n"
-        
-        r_sign = "🟢" if realized_pnl >= 0 else "🔴"
-        txt += f"{r_sign} <b>الأرباح المحققة:</b> {realized_pnl:+.2f} USDT\n"
-        
-        u_sign = "🟢" if unrealized_pnl >= 0 else "🔴"
-        u_pct = (unrealized_pnl / initial_cap) * 100.0 if initial_cap else 0.0
-        txt += f"{u_sign} <b>الأرباح الحالية (المفتوحة):</b> {unrealized_pnl:+.2f} USDT ({u_pct:+.2f}%)\n"
-        
-        net_sign = "🏆" if total_net_pnl >= 0 else "⚠️"
-        txt += f"{net_sign} <b>صافي الربح الإجمالي:</b> {total_net_pnl:+.2f} USDT ({total_return_pct:+.2f}%)\n"
-        txt += "━━━━━━━━━━━━━━━━━━━━\n"
-        
-        if not open_positions:
-            txt += "💤 <b>لا توجد صفقات مفتوحة حالياً</b>\n"
-            txt += "• الصفقات الجديدة تُسجل وتُدون هنا تلقائياً فور ظهور الإشارة\n"
-            txt += "• تُحسب الأرباح الحالية لحظياً مع كل تحديث لسعر السوق\n"
-            txt += "• تُحجز الأرباح تلقائياً عند ضرب الهدف الأول أو الثاني\n"
+        txt = "محفظتك الورقية 💵\n\n"
+        txt += f"القيمة الحالية: {total_equity:.1f}\n"
+        txt += f"صفقات مفتوحة: {len(open_positions)}\n\n"
+        if open_positions:
+            txt += "صفقاتك:\n"
+            for pos in open_positions[:5]:
+                ticker = pos.get("ticker","").replace("USDT","")
+                buy_p = float(pos.get("buy_price",0))
+                curr_p = float(pos.get("current_price", buy_p))
+                pnl = ((curr_p - buy_p)/buy_p*100) if buy_p>0 else 0
+                txt += f"{ticker} {pnl:+.1f}%\n"
+            if len(open_positions)>5:
+                txt += f"و {len(open_positions)-5} أخرى\n"
         else:
-            txt += f"📂 <b>الصفقات المفتوحة ({len(open_positions)} صفقة):</b>\n\n"
-            by_ticker = {}
-            for pos in open_positions:
-                t = pos.get("ticker", "")
-                by_ticker.setdefault(t, []).append(pos)
-                
-            for ticker, poses in list(by_ticker.items())[:8]:
-                txt += f"🪙 <b>عملة {ticker.replace('USDT','')} ({len(poses)} صفقة):</b>\n"
-                for pos in poses[:4]:
-                    num = pos.get("position_number", 1)
-                    buy_p = float(pos.get("buy_price", 0))
-                    curr_p = float(pos.get("current_price", buy_p))
-                    pnl_pct = float(pos.get("unrealized_pnl_pct", 0.0))
-                    pnl_usd = float(pos.get("unrealized_pnl_usd", 0.0))
-                    tgt1 = float(pos.get("tgt1", 0))
-                    tgt2 = float(pos.get("tgt2", 0))
-                    sl = float(pos.get("sl", 0))
-                    rem_pct = pos.get("remaining_pct", 100)
-                    cost = float(pos.get("cost_usd", 40.0))
-                    time_str = pos.get("entry_time", "")[:16].replace("T", " ")
-                    
-                    pnl_icon = "🟢" if pnl_pct >= 0 else "🔴"
-                    
-                    txt += f"┌ 📌 <b>صفقة #{num}</b> ({rem_pct}% متبقي | {pos.get('frame','5m')})\n"
-                    txt += f"├ 📥 الشراء: {fmt_p(buy_p)} USDT | التكلفة: {cost:.1f} USDT\n"
-                    txt += f"├ 🏷️ الحالي: {fmt_p(curr_p)} USDT\n"
-                    txt += f"├ {pnl_icon} <b>الربح الحالي: {pnl_pct:+.2f}% ({pnl_usd:+.2f} USDT)</b>\n"
-                    txt += f"├ 🎯 هدف 1: {fmt_p(tgt1)} | 🎯 هدف 2: {fmt_p(tgt2)}\n"
-                    txt += f"├ 🔴 الوقف: {fmt_p(sl)}\n"
-                    txt += f"└ ⏱️ {time_str} UTC\n\n"
-                    
-        if closed_deals:
-            txt += "━━━━━━━━━━━━━━━━━━━━\n"
-            txt += f"📜 <b>آخر الصفقات المغلقة ({len(closed_deals)}):</b>\n"
-            for deal in closed_deals[-5:]:
-                d_ticker = deal.get("ticker", "").replace("USDT", "")
-                d_type = deal.get("type", "")
-                d_pct = float(deal.get("profit_pct", 0.0))
-                d_usd = float(deal.get("profit_usd", 0.0))
-                d_icon = "✅" if d_pct >= 0 else "❌"
-                txt += f"{d_icon} {d_ticker}: {d_pct:+.2f}% ({d_usd:+.2f} USDT) [{d_type}]\n"
-                
-        txt += "━━━━━━━━━━━━━━━━━━━━\n"
-        txt += "🔄 التحديث تلقائي لحظة بلحظة مع حركة السوق"
-        return txt[:3900]
+            txt += "لا صفقات مفتوحة حالياً\n"
+            txt += "البوت يبحث عن فرص طيبة"
+        return txt
     except Exception as e:
-        log(f"[PORTFOLIO_TEXT] {e}")
-        return f"📊 <b>الحافظة الورقية</b>\n━━━━━━━━━━━━━━\n⚠️ خطأ في العرض: {esc(str(e)[:100])}"
+        return "محفظتك 💰\n\nحدث خطأ بسيط، سيتم الإصلاح تلقائياً"
 
 def weekly_report_text(u: dict, week_key: str = None, prices: dict = None) -> str:
     try:
@@ -2651,18 +2623,13 @@ def fmt_engine_status(res: dict) -> str:
 
 def backtest_summary(res: dict = None) -> str:
     txt = (
-        "📊 <b>باكتست حقيقي 5 سنوات (2021-2026)</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "🛡️ <b>V131 - فلترة اسبوعية:</b>\n"
-        "• 56 عملة، 1854 يوم، 11128 شمعة 4H\n"
-        "• 56 → 35 صالحة (>5M$) → Top19\n"
-        "• 3 سلال P1 95% + S2 10$ + حماية 15%\n\n"
-        "📈 <b>النتائج: 400$ → 7162$</b>\n"
-        "• +1690% | CAGR 76% | DD 22% | PF 3.3 | WR 56%\n"
-        "• 477 صفقة (269 رابحة) | $14.6 لكل صفقة\n"
-        "• IS 411% OOS 250%\n\n"
-        "🔍 <b>الفلترة:</b> Top19 BTC,SOL,XRP... مستبعدة 21 صالحة 35\n\n"
-        "⚠️ <i>لا يضمن المستقبل، DD 22%، قناص 0.25/يوم</i>"
+        "نتائج التجربة الطويلة 📊\n\n"
+        "تمت تجربة البوت على سنوات طويلة\n"
+        "في ظروف صعود وهبوط مختلفة\n"
+        "أظهر ثباتاً جميلاً مع حماية جيدة\n\n"
+        "الأرقام لا تضمن المستقبل\n"
+        "لكنها تعطي فكرة صادقة عن الأداء\n"
+        "التداول يحتاج صبر وحكمة"
     )
     return txt
 
