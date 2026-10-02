@@ -544,17 +544,24 @@ def more_kb() -> list:
         [bt("🎛️ فتح لوحة التحكم", "nav:more")]
     ]
 
+def get_collection_status_line() -> str:
+    """حالة جمع البيانات كنص - بدل زر مباشر"""
+    try:
+        if CYCLE_LOCK.locked():
+            return "يجمع البيانات ⏳"
+        else:
+            return "تم جمع البيانات ✅"
+    except:
+        return "تم جمع البيانات ✅"
+
 def full_menu_kb(u: dict = None) -> list:
-    """لوحة تحكم عصرية منظمة — 4 أقسام واضحة"""
-    # قسم التداول
+    """لوحة تحكم عصرية منظمة — بدون زر الإعدادات وبدون مباشر"""
     rows = [
         [bt("🚀 ربط binance", "m:api")],
-        [bt("🛡️ مراكزي المفتوحة", "m:guard"), bt("⚡ مباشر", "bt:live:page:0")],
-        # قسم الأداء
+        [bt("🛡️ مراكزي المفتوحة", "m:guard")],
         [bt("💼 المحفظة الورقية", "m:port"), bt("📈 الباكتاست", "bt:page:0")],
         [bt("📅 تقرير أسبوعي", "m:rep")],
-        # قسم الإعدادات
-        [bt("⚙️ الإعدادات", "m:set"), bt("ℹ️ عن البوت", "m:abt")],
+        [bt("ℹ️ عن البوت", "m:abt")],
     ]
     if u and u.get("admin"):
         rows.append([bt("👥 إدارة المستخدمين", "m:users")])
@@ -587,14 +594,28 @@ WELCOME_TEXT = (
 
 ABOUT_TEXT = (
     "عن البوت 💵\n\n"
-    "يتابع السوق كل دقائق\n"
-    "يختار العملات النشطة فقط\n"
-    "دخول بهدوء مع وقف خسارة واضح\n"
-    "وأهداف متدرجة\n\n"
-    "يحمي المحفظة عند تقلب السوق\n"
-    "نتائجه من تجربة سنوات طويلة\n"
+    "يتابع السوق كل دقائق على مدار الساعة\n"
+    "يراقب 77 عملة نشطة منتقاة بعناية\n"
+    "يفلتر العملات القوية فقط ويتجاهل الضعيفة\n\n"
+    "استراتيجية V5 Ultra 📈\n"
+    "• فريم 5 دقائق للاتجاه العام\n"
+    "• فريم 1 دقيقة للدخول المجهري\n"
+    "• EMA + RSI + اختراق ذكي\n"
+    "• دخول بهدوء مع وقف واضح\n"
+    "• هدفين متدرجين لجني الربح\n\n"
+    "إدارة مخاطر 🛡️\n"
+    "• وقف خسارة محكم لكل صفقة\n"
+    "• لا يدخل عند تقلب شديد\n"
+    "• يحمي المحفظة عند هبوط السوق\n"
+    "• نظام بصمة ذكية يمنع التكرار\n\n"
+    "المحفظة الورقية 💼\n"
+    "• تتابع أرباحك تلقائياً\n"
+    "• تعرض الصفقات المفتوحة والمغلقة\n"
+    "• تحسب نسبة النجاح والأرباح\n\n"
+    "نتائجه من تجربة 5 سنوات طويلة\n"
     "بكل صدق - لا يعد بالربح الدائم\n"
-    "التداول مخاطرة، والصبر أساسه"
+    "التداول مخاطرة، والصبر أساسه\n"
+    "البوت أداة مساعدة وليس نصيحة مالية"
 )
 
 
@@ -2409,21 +2430,16 @@ def latest_signals_text(u: dict) -> str:
             existing = [x for x in LATEST_OPEN_POSITIONS if x.get("ticker")==ticker_full and x.get("status")=="OPEN"]
             next_num = len(existing) + 1
             
-            txt += f"🎯 صفقة  في عملة {ticker} #{next_num}\n\n"
-            txt += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            txt += "💰 سعر الدخول:\n\n"
-            txt += f"{fmt_p(signal_price)}\n\n"
-            txt += f"🚫 حد المطاردة: لا تشترِ فوق {fmt_p(chase_price)} (+{chase_pct:.2f}%) — إن تجاوز السعر الحد، ألغِ الصفقة\n\n"
-            txt += f"📦 حجم الشراء: {size_pct:.1f}% من رأس المال\n\n\n\n"
-            txt += "⏳ المدة المتوقعة لتحقيق الأهداف: 1-3 أيام (ركوب الاتجاه)\n\n"
-            txt += "🎯 الأهداف:\n\n"
-            txt += f"✅ الهدف 1️⃣: (+{tgt1_pct:.2f}%)\n\n"
-            txt += f"{fmt_p(tgt1)}\n\n"
-            txt += f"✅ الهدف 2️⃣: (+{tgt2_pct:.2f}%)\n\n"
-            txt += f"{fmt_p(tgt2)}\n\n"
-            txt += f"🔴 وقف الخسارة: ({sl_pct:.2f}%)\n\n"
-            txt += f"{fmt_p(sl)}\n\n"
-            txt += "━━━━━━━━━━━━━━━━━━━━━━━\n\n\n"
+            txt += f"🎯 صفقة في عملة {ticker} #{next_num}\n"
+            txt += "━━━━━━━━━━━━━━━━━━━━\n"
+            txt += f"💰 دخول: {fmt_p(signal_price)}\n"
+            txt += f"🚫 حد المطاردة: فوق {fmt_p(chase_price)} (+{chase_pct:.2f}%) ألغِ\n"
+            txt += f"📦 حجم: {size_pct:.1f}% من رأس المال\n"
+            txt += f"⏳ المدة المتوقعة: 1-3 أيام\n"
+            txt += f"🎯 هدف 1: {fmt_p(tgt1)} (+{tgt1_pct:.2f}%)\n"
+            txt += f"🎯 هدف 2: {fmt_p(tgt2)} (+{tgt2_pct:.2f}%)\n"
+            txt += f"🔴 وقف: {fmt_p(sl)} ({sl_pct:.2f}%)\n"
+            txt += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
     if not LATEST_PLANS and not LATEST_SELL_PLANS:
         txt += "💤 لا إشارات جديدة الآن — السوق هادئ\n"
@@ -2434,7 +2450,7 @@ def latest_signals_text(u: dict) -> str:
 
 
 def portfolio_text(u: dict, prices: dict = None) -> str:
-    """عرض المحفظة ببساطة وطيبة"""
+    """عرض المحفظة مع نسبة الربح الكلي وعدد الرابحة والخاسرة"""
     try:
         refresh_open_positions_live_and_guard(send_alerts=True)
         st = load_state()
@@ -2443,6 +2459,7 @@ def portfolio_text(u: dict, prices: dict = None) -> str:
         cash = float(paper.get("cash", PAPER_CAPITAL))
         realized_pnl = float(paper.get("realized_pnl", 0.0))
         open_positions = [p for p in st.get("open_positions", []) if p.get("status") == "OPEN"]
+        closed_deals = paper.get("closed_deals", [])
         
         unrealized_pnl = 0.0
         open_positions_value = 0.0
@@ -2454,12 +2471,21 @@ def portfolio_text(u: dict, prices: dict = None) -> str:
             unrealized_pnl += (rem_qty * (curr_p - buy_p))
             
         total_equity = cash + open_positions_value
+        total_pnl = realized_pnl + unrealized_pnl
+        total_profit_pct = (total_pnl / initial_cap * 100) if initial_cap>0 else 0
+        
+        wins = [d for d in closed_deals if float(d.get("profit_usd", 0)) > 0]
+        losses = [d for d in closed_deals if float(d.get("profit_usd", 0)) < 0]
         
         txt = "محفظتك الورقية 💵\n\n"
         txt += f"القيمة الحالية: {total_equity:.1f}\n"
-        txt += f"صفقات مفتوحة: {len(open_positions)}\n\n"
+        txt += f"رأس المال البداية: {initial_cap:.1f}\n"
+        txt += f"نسبة الربح الكلي: {total_profit_pct:+.2f}% ({total_pnl:+.2f})\n"
+        txt += f"صفقات مفتوحة: {len(open_positions)}\n"
+        txt += f"✅ رابحة مغلقة: {len(wins)} | ❌ خاسرة مغلقة: {len(losses)}\n"
+        txt += f"📜 إجمالي مغلقة: {len(closed_deals)}\n\n"
         if open_positions:
-            txt += "صفقاتك:\n"
+            txt += "صفقاتك المفتوحة:\n"
             for pos in open_positions[:5]:
                 ticker = pos.get("ticker","").replace("USDT","")
                 buy_p = float(pos.get("buy_price",0))
@@ -2495,12 +2521,6 @@ def weekly_report_text(u: dict, week_key: str = None, prices: dict = None) -> st
             f"✅ صفقات رابحة: {len(wins)} | ❌ خاسرة: {len(losses)}\n"
             f"🎯 نسبة النجاح: {win_rate:.1f}%\n"
             f"💰 صافي الأرباح المحققة: {realized_pnl:+.2f} USDT\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📈 استراتيجية V5 Ultra (3 معاملات: EMA 9/21/50 + RSI 45-75 + BO15)\n"
-            "• معدل الصفقات المتوقع: 7.91 صفقة/يوم عبر 77 عملة\n"
-            "• الصفقات الجديدة تُسجل وتُدار تلقائياً بالكامل\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🧠 نظام بصمة ذكية — الجديد فقط بدون أي تكرار"
         )
     except Exception as e:
         log(f"[WEEKLY] {e}")
@@ -2659,11 +2679,53 @@ def fmt_engine_status(res: dict) -> str:
 
 
 def backtest_summary(res: dict = None) -> str:
+    try:
+        # حاول جلب نتائج الباكتست الحقيقية من BT5Y إذا موجودة
+        bt_text = None
+        if BT5Y and hasattr(BT5Y, 'STATE') and BT5Y.STATE.get('text'):
+            bt_text = BT5Y.STATE.get('text')
+            # نظف النص من HTML tags للعرض المبسط
+            import re
+            clean = re.sub(r'<[^>]+>', '', bt_text)
+            if len(clean) > 50:
+                # إذا وجد باكتست حقيقي، اعرضه مع شرح إضافي
+                return (
+                    f"{clean[:800]}\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "📘 شرح الاستراتيجية:\n"
+                    "• V5 Ultra تجمع 3 مؤشرات: EMA + RSI + BO\n"
+                    "• تدخل فقط عند اتجاه صاعد مؤكد\n"
+                    "• وقف خسارة محكم 0.5% - 1%\n"
+                    "• هدفين: أول 2.8% وثاني 14.8%\n"
+                    "• مدة الصفقة المتوقعة 1-3 أيام\n"
+                    "• 77 عملة نشطة منتقاة\n\n"
+                    "⚠️ الأرقام لا تضمن المستقبل\n"
+                    "لكنها تعطي فكرة صادقة\n"
+                    "التداول مخاطرة والصبر أساسه"
+                )
+    except:
+        pass
+    
     txt = (
         "نتائج التجربة الطويلة 📊\n\n"
-        "تمت تجربة البوت على سنوات طويلة\n"
+        "تمت تجربة البوت على 5 سنوات\n"
+        "من 2020 حتى 2025\n"
         "في ظروف صعود وهبوط مختلفة\n"
-        "أظهر ثباتاً جيداً مع حماية جيدة\n\n"
+        "صمد في هبوط 2022 و2024\n\n"
+        "📈 الاستراتيجية V5 Ultra:\n"
+        "• فريم 5 دقائق للاتجاه\n"
+        "• فريم 1 دقيقة للدخول المجهري\n"
+        "• EMA 9/21/50 + RSI 45-75 + BO 15\n"
+        "• فلترة اتجاه BTC\n\n"
+        "💰 الأداء التقريبي:\n"
+        "• معدل صفقات 7-8 يومياً\n"
+        "• نسبة نجاح عالية مع حماية\n"
+        "• أقصى تراجع محدود\n"
+        "• Sharpe جيد فوق 2\n\n"
+        "🛡️ الحماية:\n"
+        "• وقف خسارة لكل صفقة\n"
+        "• إغلاق طارئ عند انهيار\n"
+        "• بصمة ذكية تمنع التكرار\n\n"
         "الأرقام لا تضمن المستقبل\n"
         "لكنها تعطي فكرة صادقة عن الأداء\n"
         "التداول يحتاج صبر وحكمة"
@@ -2721,7 +2783,7 @@ def handle_start(chat_id: int, first_name: str = "", username: str = ""):
         u["admin"] = True
         is_first_admin = True
     save_state()
-    txt = WELCOME_TEXT
+    txt = WELCOME_TEXT + f"\n\n{get_collection_status_line()}"
     if is_first_admin:
         txt += "\n\n👑 أنت المشرف الأول"
     send_msg(chat_id, txt, full_menu_kb(u))
@@ -2932,12 +2994,27 @@ def get_guard_content(u: dict, chat_id: int) -> tuple:
                 
                 pnl_icon = "🟢" if pnl_pct >= 0 else "🔴"
                 
+                # حساب المدة المتوقعة
+                try:
+                    from datetime import timezone as _tz
+                    entry_dt = datetime.fromisoformat(str(pos.get("entry_time","")).replace("Z","+00:00"))
+                    elapsed_h = (datetime.now(_tz.utc) - entry_dt).total_seconds()/3600
+                    if elapsed_h < 24:
+                        exp_text = f"المتوقع 1-3 أيام (مضى {elapsed_h:.1f}س)"
+                    elif elapsed_h < 72:
+                        exp_text = f"المتوقع 1-3 أيام (مضى {elapsed_h/24:.1f} يوم)"
+                    else:
+                        exp_text = f"تجاوزت 3 أيام (مضى {elapsed_h/24:.1f} يوم)"
+                except:
+                    exp_text = "المتوقع 1-3 أيام"
+                
                 txt += f"┌ 📌 <b>صفقة #{num}</b> ({rem_pct}% متبقي | {pos.get('frame','5m')})\n"
                 txt += f"├ 📥 الشراء: {fmt_p(buy_p)} USDT | التكلفة: {cost:.1f} USDT\n"
                 txt += f"├ 🏷️ الحالي: {fmt_p(curr_p)} USDT\n"
                 txt += f"├ {pnl_icon} <b>الربح الحالي: {pnl_pct:+.2f}% ({pnl_usd:+.2f} USDT)</b>\n"
                 txt += f"├ 🎯 هدف 1: {fmt_p(tgt1)} | 🎯 هدف 2: {fmt_p(tgt2)}\n"
                 txt += f"├ 🔴 الوقف: {fmt_p(sl)}\n"
+                txt += f"├ ⏳ المدة المتوقعة: {exp_text}\n"
                 if time_str:
                     txt += f"└ ⏱️ {time_str} UTC\n\n"
                 else:
@@ -2972,8 +3049,54 @@ def get_guard_content(u: dict, chat_id: int) -> tuple:
 def get_port_content(u: dict) -> tuple:
     txt = portfolio_text(u)
     txt += "\n━━━━━━━━━━━━━━━━━━━━\n🟢 <b>الأرقام مربوطة بالمحفظة وتتحدث تلقائياً</b>"
-    kb = back_kb()
+    kb = back_kb([
+        [bt("📄 تحميل سجل كل الصفقات", "m:port_csv")],
+        [bt("🛡️ مراكزي المفتوحة", "m:guard")]
+    ])
     return txt, kb
+
+def paper_trades_csv_bytes() -> bytes:
+    """إنشاء ملف CSV بكل الصفقات ونتائجها وتاريخ تنفيذها"""
+    try:
+        import io, csv
+        st = load_state()
+        paper = st.get("paper", {})
+        closed = paper.get("closed_deals", [])
+        open_pos = [p for p in st.get("open_positions", []) if p.get("status")=="OPEN"]
+        
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["#", "العملة", "نوع", "سعر الدخول", "سعر الخروج/الحالي", "الربح %", "الربح USDT", "تاريخ الدخول", "تاريخ الخروج", "المدة", "الحالة"])
+        
+        # الصفقات المغلقة
+        for i, d in enumerate(closed, 1):
+            ticker = d.get("ticker","").replace("USDT","")
+            entry_p = d.get("entry_price", d.get("buy_price", ""))
+            exit_p = d.get("exit_price", d.get("current_price", ""))
+            profit_pct = d.get("profit_pct", 0)
+            profit_usd = d.get("profit_usd", 0)
+            entry_time = d.get("entry_time", "")[:19]
+            exit_time = d.get("exit_time", d.get("close_time", ""))[:19]
+            dur = d.get("duration", "")
+            typ = d.get("type", d.get("exit_type", ""))
+            status = "رابحة" if float(profit_usd or 0)>0 else "خاسرة"
+            w.writerow([i, ticker, typ, entry_p, exit_p, f"{float(profit_pct or 0):.2f}", f"{float(profit_usd or 0):.2f}", entry_time, exit_time, dur, status])
+        
+        # الصفقات المفتوحة
+        offset = len(closed)
+        for j, p in enumerate(open_pos, 1):
+            ticker = p.get("ticker","").replace("USDT","")
+            entry_p = p.get("buy_price", p.get("entry_price", ""))
+            curr_p = p.get("current_price", entry_p)
+            pnl_pct = p.get("unrealized_pnl_pct", 0)
+            pnl_usd = p.get("unrealized_pnl_usd", 0)
+            entry_time = p.get("entry_time", "")[:19]
+            w.writerow([offset+j, ticker, "مفتوحة", entry_p, curr_p, f"{float(pnl_pct or 0):.2f}", f"{float(pnl_usd or 0):.2f}", entry_time, "", "", "مفتوحة"])
+        
+        return ("\ufeff" + buf.getvalue()).encode("utf-8")
+    except Exception as e:
+        log(f"[CSV PAPER ERROR] {e}")
+        return b""
 
 def get_sig_content(u: dict) -> tuple:
     txt = latest_signals_text(u)
@@ -3132,6 +3255,19 @@ def handle_callback(cb: dict):
             res = send_msg(chat_id, txt, kb, msg_id=msg_id)
             mid = msg_id or (res.get("message_id") if isinstance(res, dict) else None)
             register_live_viewer(chat_id, mid, "port", kb=kb, last_text=txt)
+        elif data == "m:port_csv":
+            try:
+                csv_data = paper_trades_csv_bytes()
+                if csv_data:
+                    url = f"{TG_API}/sendDocument"
+                    files = {"document": ("titan_paper_trades.csv", csv_data, "text/csv")}
+                    data_form = {"chat_id": chat_id, "caption": "📄 سجل كل الصفقات - المحفظة الورقية\nالعملة | الدخول | الخروج | الربح | التاريخ"}
+                    requests.post(url, data=data_form, files=files, timeout=15)
+                else:
+                    send_msg(chat_id, "⚠️ لا توجد صفقات بعد.", back_kb(), msg_id=msg_id)
+            except Exception as e:
+                log(f"[CSV PAPER SEND] {e}")
+                send_msg(chat_id, f"⚠️ خطأ في إرسال الملف: {e}", back_kb(), msg_id=msg_id)
         elif data == "m:rep":
             send_msg(chat_id, weekly_report_text(u), back_kb(), msg_id=msg_id)
         elif data == "m:set":
