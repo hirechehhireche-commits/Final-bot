@@ -31,7 +31,6 @@ except Exception:
 try:
     from cache_loader import load_from_bundle, load_titans_cache, load_gate5m, load_gate1m, get_bundle
     HAS_CACHE_BUNDLE = True
-    print("[Cache] ✅ Using single bundle file titan_cache_bundle.pkl")
 except ImportError:
     HAS_CACHE_BUNDLE = False
     load_from_bundle = None
@@ -102,8 +101,20 @@ for _x in ALLOWED_USERS_ENV:
         ALLOWED_NAMES_ENV.add(_x.lower().lstrip("@"))
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.environ.get("TITAN_STATE_FILE", os.path.join(SCRIPT_DIR, "bot_state_v241.json"))
-WORKSPACE_DIR = os.environ.get("TITAN_CACHE_DIR", SCRIPT_DIR)
+# 🛡️ Render Free Fix: /var/data/bot_state.json يحتاج Disk مدفوع - استخدم محلي
+_raw_state = os.environ.get("TITAN_STATE_FILE", "")
+if _raw_state.startswith("/var/"):
+    print(f"[Fix] TITAN_STATE_FILE {_raw_state} يحتاج Disk مدفوع - استخدام محلي")
+    STATE_FILE = os.path.join(SCRIPT_DIR, "bot_state_v241.json")
+else:
+    STATE_FILE = os.environ.get("TITAN_STATE_FILE", os.path.join(SCRIPT_DIR, "bot_state_v241.json"))
+
+_raw_ws = os.environ.get("TITAN_CACHE_DIR", "")
+if _raw_ws.startswith("/var/"):
+    print(f"[Fix] TITAN_CACHE_DIR {_raw_ws} يحتاج Disk مدفوع - استخدام محلي")
+    WORKSPACE_DIR = SCRIPT_DIR
+else:
+    WORKSPACE_DIR = os.environ.get("TITAN_CACHE_DIR", SCRIPT_DIR)
 DATA_DAYS = int(os.environ.get("TITAN_GATE_DAYS", "60"))
 CYCLE_DELAY_SEC = int(os.environ.get("TITAN_CYCLE_DELAY", "15"))
 FETCH_WORKERS = int(os.environ.get("TITAN_FETCH_WORKERS", "6"))
@@ -113,7 +124,21 @@ MAX_SEEN_EVENTS = 6000
 PROXIMITY_PCT = 1.5
 BACKTEST_PAGE_ROWS = 14
 
-os.makedirs(WORKSPACE_DIR, exist_ok=True)
+# 🛡️ Render Free Fix: /var/data يحتاج Disk مدفوع - fallback للمجلد المحلي
+try:
+    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+except PermissionError:
+    print(f"[Fix] Permission denied {WORKSPACE_DIR} - fallback to {SCRIPT_DIR}")
+    WORKSPACE_DIR = SCRIPT_DIR
+    STATE_FILE = os.path.join(SCRIPT_DIR, "bot_state_v241.json")
+    try:
+        os.makedirs(WORKSPACE_DIR, exist_ok=True)
+    except:
+        pass
+except Exception as e:
+    print(f"[Fix] makedirs {WORKSPACE_DIR} fail: {e} - fallback to {SCRIPT_DIR}")
+    WORKSPACE_DIR = SCRIPT_DIR
+    STATE_FILE = os.path.join(SCRIPT_DIR, "bot_state_v241.json")
 
 GOLDEN_ASSETS = GS_ENGINE.GOLDEN_APPROVED_COINS if HAS_UNIFIED else []
 TITAN_ASSETS = ['SOL','FET','DOT','XRP','BNB','ETH','XLM','HBAR','TRX','LINK','ADA','LTC','DOGE','ARB','BCH','ETC','EOS','ZEC','BTC','AVAX']
@@ -308,15 +333,27 @@ def load_state() -> dict:
         _STATE = st
         return _STATE
 def save_state():
+    global STATE_FILE
     with STATE_LOCK:
         if _STATE is None:
             return
-        os.makedirs(os.path.dirname(os.path.abspath(STATE_FILE)), exist_ok=True)
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(STATE_FILE)), exist_ok=True)
+        except PermissionError:
+            # Fallback محلي إذا /var/data ممنوع
+            STATE_FILE = os.path.join(SCRIPT_DIR, "bot_state_v241.json")
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(STATE_FILE)), exist_ok=True)
+            except:
+                pass
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_STATE, f, ensure_ascii=False, default=str)
             f.flush()
-        os.chmod(tmp, 0o600)
+        try:
+            os.chmod(tmp, 0o600)
+        except:
+            pass
         os.replace(tmp, STATE_FILE)
 def get_user(chat_id: int, create: bool = True) -> dict:
     st = load_state()
@@ -1856,7 +1893,7 @@ def send_sell_alerts_immediately(sell_plans: list):
                 txt += f"تم تأمين جزء من الربح\n"
                 txt += f"الباقي محمي بإذن الله\n\n"
             elif sell_type == "T2":
-                txt += f"هدف ثاني جميل في {ticker} 💵\n"
+                txt += f"هدف ثاني جيد في {ticker} 💵\n"
                 txt += f"تم جني ربح طيب\n\n"
             elif sell_type == "TIME":
                 txt += f"انتهت مدة صفقة {ticker} ⏰\n"
@@ -2626,7 +2663,7 @@ def backtest_summary(res: dict = None) -> str:
         "نتائج التجربة الطويلة 📊\n\n"
         "تمت تجربة البوت على سنوات طويلة\n"
         "في ظروف صعود وهبوط مختلفة\n"
-        "أظهر ثباتاً جميلاً مع حماية جيدة\n\n"
+        "أظهر ثباتاً جيداً مع حماية جيدة\n\n"
         "الأرقام لا تضمن المستقبل\n"
         "لكنها تعطي فكرة صادقة عن الأداء\n"
         "التداول يحتاج صبر وحكمة"

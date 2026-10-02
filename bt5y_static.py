@@ -41,7 +41,23 @@ except Exception as e:
     print(f"[bt5y_static] Bundle check fail: {e}")
     CACHE_DIR = os.environ.get("TITAN_CACHE_DIR", os.path.join(HERE, "bot_cache"))
 
+# 🛡️ Render Free Fix: إذا CACHE_DIR /var/data ممنوع → fallback محلي
+def _safe_cache_dir():
+    try:
+        cd = CACHE_DIR
+        if cd and cd.startswith("/var/"):
+            # حاول إنشاؤه، إذا فشل استخدم المحلي
+            try:
+                os.makedirs(cd, exist_ok=True)
+            except PermissionError:
+                print(f"[bt5y_static] Permission denied {cd} - fallback to {os.path.join(HERE, 'bot_cache')}")
+                return os.path.join(HERE, "bot_cache")
+        return cd
+    except:
+        return os.path.join(HERE, "bot_cache")
+
 if CACHE_DIR:
+    CACHE_DIR = _safe_cache_dir()
     STORE_5Y = os.path.join(CACHE_DIR, "titans_4h_5y_cache.pkl")
     RESULT_5Y = os.path.join(CACHE_DIR, "bt5y_static_result.pkl")
 else:
@@ -272,7 +288,14 @@ def ensure(workspace_dir=None, log=print):
             return STATE
         STATE["status"] = "building"
     try:
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+        except PermissionError:
+            print(f"[bt5y_static] Permission denied {CACHE_DIR} - fallback to {os.path.join(HERE, 'bot_cache')}")
+            CACHE_DIR = os.path.join(HERE, "bot_cache")
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            STORE_5Y = os.path.join(CACHE_DIR, "titans_4h_5y_cache.pkl")
+            RESULT_5Y = os.path.join(CACHE_DIR, "bt5y_static_result.pkl")
         if os.path.exists(RESULT_5Y):
             art = pd.read_pickle(RESULT_5Y)
             STATE.update(status="ready", text=art["summary"], rows=art["rows"],

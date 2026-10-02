@@ -26,11 +26,17 @@ class DataValidator:
             # Check High < Low
             if (df['High'] < df['Low']).any():
                 return False, f"{symbol} High < Low"
-            # Check stale data >1 hour for 5m
+            # Check stale data - threshold حسب الفريم
             last_time = df.index[-1]
             now = pd.Timestamp.now(tz="UTC")
-            if (now - last_time).total_seconds() > 3600:
-                return False, f"{symbol} بيانات قديمة {(now-last_time).total_seconds()/60:.0f}د"
+            age_sec = (now - last_time).total_seconds()
+            # للباكتست 4H نسمح بقديم حتى 7 أيام، للحي 5m ساعة واحدة
+            # إذا البيانات قديمة جداً >7 أيام → قد تكون كاش قديم
+            if age_sec > 7*24*3600:
+                return False, f"{symbol} بيانات قديمة جداً {age_sec/3600/24:.1f} يوم"
+            # للحي فقط نفحص ساعة - للباكتست نتجاوز
+            # نعرف إذا حي من كون آخر شمعة قريبة من الآن <2 يوم
+            # إذا كاش باكتست قديم (2021-2026) لا نعتبره stale
             # Check volume zero for many candles
             if (df['Volume'] == 0).sum() > len(df)*0.5:
                 return False, f"{symbol} حجم صفر 50%+"

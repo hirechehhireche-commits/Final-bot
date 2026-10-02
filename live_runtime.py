@@ -30,7 +30,14 @@ def init(bot):
         if u.scheme!='https' or not u.netloc or u.username or u.password or u.path not in ('','/') or u.query or u.fragment:
             raise ValueError('PUBLIC_BASE_URL must be an HTTPS origin without a path')
     ws_dir = getattr(B, 'WORKSPACE_DIR', os.getcwd()) if B else os.getcwd()
-    os.makedirs(ws_dir, exist_ok=True)
+    try:
+        os.makedirs(ws_dir, exist_ok=True)
+    except PermissionError:
+        ws_dir = os.getcwd()
+        try:
+            os.makedirs(ws_dir, exist_ok=True)
+        except:
+            pass
     path=os.environ.get('TITAN_LIVE_DB',os.path.join(ws_dir,'live_execution.sqlite3'))
     # APP_SECRET افتراضي — مشتق من BOT_TOKEN إذا لم يضبط — يبقى ثابت طالما BOT_TOKEN ثابت
     app_secret=os.environ.get('APP_SECRET','')
