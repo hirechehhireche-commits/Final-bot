@@ -120,6 +120,15 @@ CYCLE_DELAY_SEC = int(os.environ.get("TITAN_CYCLE_DELAY", "15"))
 FETCH_WORKERS = int(os.environ.get("TITAN_FETCH_WORKERS", "6"))
 HEALTH_PORT = int(os.environ.get("PORT", "8080"))
 PAPER_CAPITAL = 400.0
+# ==== [PAPER-REAL ALIGN] معاملات الورقي مطابقة للتنفيذ الحقيقي على Binance ====
+PAPER_FEE_PCT = 0.0010        # عمولة Binance القياسية لكل جهة (0.10%)
+PAPER_SLIPPAGE_PCT = 0.0005   # انزلاق تقديري للبيع السوقي (0.05%) — مثل احتكاك الباكتست
+PAPER_FRICTION_SELL = PAPER_FEE_PCT + PAPER_SLIPPAGE_PCT  # 0.15% عند كل بيع
+PAPER_MIN_SLOT = 12.0         # أدنى ميزانية صفقة (نفس حد accept_plan الحقيقي ~12$)
+PAPER_BE_LOCK = 1.005         # قفل التعادل بعد T1 مطابقاً للتنفيذ الحقيقي (+0.5%)
+PAPER_MAX_SAME_SYMBOL = 3     # أقصى صفقات لنفس العملة (نفس قيد الحساب الحقيقي)
+PAPER_COMPOUND = True         # الميزانية من إجمالي السيولة الورقية (تراكمي كوضع كامل الرصيد)
+PAPER_USE_SIZE_PCT = True     # الميزانية = السيولة × size_pct للإشارة (مثل budget = equity×size%)
 MAX_SEEN_EVENTS = 6000
 PROXIMITY_PCT = 1.5
 BACKTEST_PAGE_ROWS = 14
@@ -1521,7 +1530,13 @@ def create_open_position(plan: dict, now: datetime):
         buy_price = float(plan.get("signal_price", plan.get("price", 0)))
         if buy_price <= 0:
             return None
-            
+
+        # [PAPER-REAL ALIGN] نفس قيد الحساب الحقيقي: حد أقصى من الصفقات لنفس العملة
+        same_sym_open = [p for p in positions if p.get("ticker") == ticker and p.get("status") == "OPEN"]
+        if len(same_sym_open) >= PAPER_MAX_SAME_SYMBOL:
+            log(f"[PAPER] ⛔ {ticker}: {len(same_sym_open)} صفقات مفتوحة (الحد {PAPER_MAX_SAME_SYMBOL}) — تخطي مثل الحساب الحقيقي")
+            return None
+
         # حساب رقم الصفقة لنفس العملة
         existing_nums = [p.get("position_number", 0) for p in positions if p.get("ticker") == ticker and p.get("status") == "OPEN"]
         next_num = max(existing_nums, default=0) + 1
@@ -1539,14 +1554,24 @@ def create_open_position(plan: dict, now: datetime):
             st["paper"] = paper
             
         cash = float(paper.get("cash", PAPER_CAPITAL))
-        # [FIX] منطق كاش سليم: لا ننشئ صفقة إذا الكاش < 10$، وإلا نستخدم min(40, cash)
-        if cash < 10.0:
-            log(f"[PAPER] ⚠️ كاش غير كافٍ ({cash:.2f}$) لإنشاء صفقة {ticker} — تخطي")
+        # [PAPER-REAL ALIGN] الميزانية = إجمالي السيولة الورقية × size_pct (نفس منطق budget = equity×size% في accept_plan)
+        paper_equity = cash
+        if PAPER_COMPOUND:
+            for _op in positions:
+                if _op.get("status") == "OPEN":
+                    _rq = float(_op.get("remaining_qty", _op.get("qty", 0.0)) or 0.0)
+                    _cp = float(_op.get("current_price", _op.get("buy_price", 0.0)) or 0.0)
+                    paper_equity += _rq * _cp
+        size_pct_plan = float(plan.get("size_pct", 10.0) or 10.0)
+        slot_cost = (paper_equity * size_pct_plan / 100.0) if PAPER_USE_SIZE_PCT else min(40.0, cash)
+        slot_cost = min(slot_cost, cash * 0.99)
+        if slot_cost < PAPER_MIN_SLOT:
+            log(f"[PAPER] ⚠️ ميزانية غير كافية ({slot_cost:.2f}$ < {PAPER_MIN_SLOT}$) لصفقة {ticker} — تخطي مثل الحساب الحقيقي")
             return None
-        slot_cost = min(40.0, cash)
-        # خصم الكاش دائماً (مضمون لأن cash >=10 و slot_cost <= cash)
+        # خصم الكاش دائماً
         paper["cash"] = round(cash - slot_cost, 2)
-        qty = round(slot_cost / buy_price, 6)
+        # [PAPER-REAL ALIGN] خصم عمولة الدخول من الكمية (LIMIT بلا انزلاق — مثل net_filled في Binance)
+        qty = round((slot_cost * (1.0 - PAPER_FEE_PCT)) / buy_price, 6)
         if qty <= 0:
             paper["cash"] = round(cash, 2)  # استرجاع الكاش
             return None
@@ -1644,12 +1669,14 @@ def update_open_positions_market_data(store: dict, now: datetime):
             if curr_p and curr_p > 0:
                 pos["current_price"] = curr_p
                 buy_p = float(pos.get("buy_price", pos.get("entry_price", curr_p)))
-                diff_pct = ((curr_p - buy_p) / buy_p) * 100.0 if buy_p else 0.0
+                # [PAPER-REAL ALIGN] الربح غير المحقق = متحصلات البيع المقدرة بعد الاحتكاك − أساس التكلفة
                 rem_qty = float(pos.get("remaining_qty", pos.get("qty", 0.0)))
-                profit_usd = rem_qty * (curr_p - buy_p)
+                _cost = float(pos.get("cost_usd", 40.0)) * (0.5 if pos.get("t1_sold") else 1.0)
+                profit_usd = rem_qty * curr_p * (1.0 - PAPER_FRICTION_SELL) - _cost
+                diff_pct = (profit_usd / _cost * 100.0) if _cost > 0 else 0.0
                 pos["unrealized_pnl_pct"] = round(diff_pct, 2)
                 pos["unrealized_pnl_usd"] = round(profit_usd, 2)
-                
+
         st["open_positions"] = positions
         save_state()
         return current_prices
@@ -1777,18 +1804,20 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                 pos_num = pos.get("position_number", 1)
                 
                 if sell_type == "T1":
-                    # بيع 50% من الصفقة
+                    # بيع 50% من الصفقة — [PAPER-REAL ALIGN] نفس محاسبة البيع الحقيقي (متحصلات بعد الاحتكاك − أساس التكلفة)
                     sold_qty = float(pos.get("qty", 0)) * 0.5
-                    profit_pct = ((curr_price - buy_p) / buy_p) * 100.0 if buy_p else 0.0
-                    profit_usd = sold_qty * (curr_price - buy_p)
-                    
+                    cost_basis = float(pos.get("cost_usd", 40.0)) * 0.5
+                    proceeds = sold_qty * curr_price * (1.0 - PAPER_FRICTION_SELL)  # عمولة + انزلاق البيع السوقي
+                    profit_usd = proceeds - cost_basis
+                    profit_pct = (profit_usd / cost_basis * 100.0) if cost_basis > 0 else 0.0
+
                     pos["t1_sold"] = True
                     pos["remaining_pct"] = 50
                     pos["remaining_qty"] = float(pos.get("qty", 0)) * 0.5
                     pos["status"] = "OPEN"
-                    pos["sl"] = round(buy_p * 1.003, 4)  # نقل الوقف إلى نقطة التعادل Breakeven (+0.30%) لحماية المتبقي
-                    
-                    paper["cash"] = round(float(paper.get("cash", 0)) + (sold_qty * curr_price), 2)
+                    pos["sl"] = buy_p * PAPER_BE_LOCK  # قفل التعادل مطابقاً للتنفيذ الحقيقي (+0.5%)
+
+                    paper["cash"] = round(float(paper.get("cash", 0)) + proceeds, 2)
                     paper["realized_pnl"] = round(float(paper.get("realized_pnl", 0)) + profit_usd, 2)
                     
                     deal = {
@@ -1804,11 +1833,13 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                     paper.setdefault("closed_deals", []).append(deal)
                     log(f"[PAPER DEAL] تسجيل صفقة ورقية T1: {ticker} #{pos_num} ربح {profit_pct:+.2f}% (+{profit_usd:+.2f}$)")
                     
-                else:  # T2, SL, TIME (إغلاق كامل)
+                else:  # T2, SL, TIME (إغلاق كامل) — [PAPER-REAL ALIGN] نفس محاسبة البيع الحقيقي
                     rem_qty = float(pos.get("remaining_qty", pos.get("qty", 0)))
-                    profit_pct = ((curr_price - buy_p) / buy_p) * 100.0 if buy_p else 0.0
-                    profit_usd = rem_qty * (curr_price - buy_p)
-                    
+                    remaining_cost = float(pos.get("cost_usd", 40.0)) * (0.5 if pos.get("t1_sold") else 1.0)
+                    proceeds = rem_qty * curr_price * (1.0 - PAPER_FRICTION_SELL)  # عمولة + انزلاق
+                    profit_usd = proceeds - remaining_cost
+                    profit_pct = (profit_usd / remaining_cost * 100.0) if remaining_cost > 0 else 0.0
+
                     pos["status"] = "CLOSED"
                     pos["remaining_pct"] = 0
                     pos["remaining_qty"] = 0
@@ -1817,8 +1848,8 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                     pos["close_price"] = curr_price
                     pos["final_profit_pct"] = round(profit_pct, 2)
                     pos["final_profit_usd"] = round(profit_usd, 2)
-                    
-                    paper["cash"] = round(float(paper.get("cash", 0)) + (rem_qty * curr_price), 2)
+
+                    paper["cash"] = round(float(paper.get("cash", 0)) + proceeds, 2)
                     paper["realized_pnl"] = round(float(paper.get("realized_pnl", 0)) + profit_usd, 2)
                     
                     type_label = {
@@ -1864,7 +1895,7 @@ def update_position_after_sell(pos_id: str, sell_type: str, sell_price: float = 
                                 upos["remaining_pct"] = 50
                                 upos["remaining_qty"] = float(upos.get("qty", 0)) * 0.5
                                 if _sync_buy_p > 0:
-                                    upos["sl"] = round(_sync_buy_p * 1.003, 4)
+                                    upos["sl"] = _sync_buy_p * PAPER_BE_LOCK
                                 upos["status"] = "OPEN"
                             else:
                                 upos["status"] = "CLOSED"
@@ -1987,9 +2018,11 @@ def refresh_open_positions_live_and_guard(send_alerts: bool = True) -> list:
                 pos["last_tick_time"] = now_epoch
                 
                 buy_p = float(pos.get("buy_price", pos.get("entry_price", curr_p)))
-                diff_pct = ((curr_p - buy_p) / buy_p) * 100.0 if buy_p > 0 else 0.0
+                # [PAPER-REAL ALIGN] الربح غير المحقق = متحصلات البيع المقدرة بعد الاحتكاك − أساس التكلفة
                 rem_qty = float(pos.get("remaining_qty", pos.get("qty", 0.0)))
-                profit_usd = rem_qty * (curr_p - buy_p)
+                _cost = float(pos.get("cost_usd", 40.0)) * (0.5 if pos.get("t1_sold") else 1.0)
+                profit_usd = rem_qty * curr_p * (1.0 - PAPER_FRICTION_SELL) - _cost
+                diff_pct = (profit_usd / _cost * 100.0) if _cost > 0 else 0.0
                 pos["unrealized_pnl_pct"] = round(diff_pct, 2)
                 pos["unrealized_pnl_usd"] = round(profit_usd, 2)
                 changed = True
@@ -2975,15 +3008,17 @@ def get_guard_content(u: dict, chat_id: int) -> tuple:
                 buy_p = float(pos.get("buy_price", pos.get("entry_price", 0.0)))
                 curr_p = float(pos.get("current_price", buy_p))
                 
-                # حساب الأرباح الحالية بدقة ومطابقتها التامة للمحفظة الورقية
+                # حساب الأرباح الحالية بدقة ومطابقتها التامة للمحفظة الورقية (محاسبة بيع حقيقية)
+                _gc_cost = float(pos.get("cost_usd", 40.0)) * (0.5 if pos.get("t1_sold") else 1.0)
                 pnl_pct = float(pos.get("unrealized_pnl_pct", 0.0))
-                if pnl_pct == 0.0 and buy_p > 0 and curr_p != buy_p:
-                    pnl_pct = round(((curr_p - buy_p) / buy_p) * 100.0, 2)
-                    
+                if pnl_pct == 0.0 and buy_p > 0 and curr_p != buy_p and _gc_cost > 0:
+                    rem_qty = float(pos.get("remaining_qty", pos.get("qty", 0.0)))
+                    pnl_pct = round((rem_qty * curr_p * (1.0 - PAPER_FRICTION_SELL) - _gc_cost) / _gc_cost * 100.0, 2)
+
                 pnl_usd = float(pos.get("unrealized_pnl_usd", 0.0))
                 if pnl_usd == 0.0 and buy_p > 0 and curr_p != buy_p:
                     rem_qty = float(pos.get("remaining_qty", pos.get("qty", 0.0)))
-                    pnl_usd = round(rem_qty * (curr_p - buy_p), 2)
+                    pnl_usd = round(rem_qty * curr_p * (1.0 - PAPER_FRICTION_SELL) - _gc_cost, 2)
                     
                 tgt1 = float(pos.get("tgt1", pos.get("t1", buy_p * 1.028 if buy_p > 0 else 0.0)))
                 tgt2 = float(pos.get("tgt2", pos.get("t2", buy_p * 1.148 if buy_p > 0 else 0.0)))
